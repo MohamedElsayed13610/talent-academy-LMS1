@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
@@ -6,8 +8,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, http_exception_handler, validation_exception_handler
+from app.jobs import scheduler as jobs_scheduler
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Scheduled jobs (ARCHITECTURE.md §8) — file_cleanup for now, more in later phases. Guarded by
+    # a Postgres advisory lock per job, so this is safe even if Railway ever runs >1 instance.
+    jobs_scheduler.start()
+    yield
+    jobs_scheduler.stop()
+
+
+app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

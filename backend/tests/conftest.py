@@ -132,3 +132,17 @@ def admin_client(client, admin_user):
     response = client.post("/api/v1/auth/login", json={"identifier": "admin@talent.dev", "password": "Admin123!Dev"})
     assert response.status_code == 200, response.text
     return AuthedClient(client)
+
+
+@pytest.fixture()
+def fake_s3(monkeypatch):
+    """Swaps app/services/storage_r2.py's boto3 client for an in-memory fake (tests/fake_s3.py).
+    This sandbox has no Docker Hub access to pull minio/minio for a real S3-compatible endpoint —
+    everything above the network call (validation, the files/pending_file_deletions rows, the
+    upload/download API routes) still runs for real against this."""
+    from app.services import storage_r2
+    from tests.fake_s3 import FakeS3Client
+
+    instance = FakeS3Client()
+    monkeypatch.setattr(storage_r2, "_client", lambda: instance)
+    return instance

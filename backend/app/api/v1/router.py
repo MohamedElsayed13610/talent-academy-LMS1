@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api.v1 import auth, courses, groups, public, students
+from app.api.v1 import auth, courses, files, groups, me_courses, public, students
 from app.db.session import get_db
 
 router = APIRouter()
@@ -11,6 +11,11 @@ router.include_router(public.router)
 router.include_router(students.router)
 router.include_router(groups.router)
 router.include_router(courses.router)
+router.include_router(courses.sections_router)
+router.include_router(courses.lessons_router)
+router.include_router(courses.materials_router)
+router.include_router(files.router)
+router.include_router(me_courses.router)
 
 
 @router.get("/health", tags=["health"])
