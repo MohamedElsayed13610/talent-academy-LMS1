@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     public_domain: str = ""
 
     r2_endpoint_url: str = ""
+    r2_public_endpoint_url: str = ""
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_bucket_files: str = "talent-files"
