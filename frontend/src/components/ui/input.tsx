@@ -23,3 +23,19 @@ export const Label = React.forwardRef<HTMLLabelElement, React.LabelHTMLAttribute
   ),
 );
 Label.displayName = "Label";
+
+export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className, ...props }, ref) => (
+    <textarea
+      ref={ref}
+      className={cn(
+        "flex w-full rounded-md border border-border bg-surface px-3.5 py-2.5 text-body-sm text-text placeholder:text-text-subtle",
+        "transition-colors duration-[var(--t-fast)] focus-visible:outline-2 focus-visible:outline-[var(--ring)] focus-visible:outline-offset-2 focus-visible:border-border-strong",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
+Textarea.displayName = "Textarea";

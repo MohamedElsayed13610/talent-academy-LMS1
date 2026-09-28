@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, EmailStr, Field
+
+Grade = Literal["G10", "G11", "G12"]
+StudentTypeL = Literal["academy", "external"]
+SubscriptionL = Literal["active", "pending", "expired", "suspended"]
+
+
+class StudentCreate(BaseModel):
+    student_code: str = Field(min_length=1, max_length=32)
+    full_name: str = Field(min_length=2, max_length=120)
+    email: EmailStr | None = None
+    guardian_phone: str = Field(default="", max_length=40)
+    grade_level: Grade | None = None
+    student_type: StudentTypeL = "academy"
+    subscription_status: SubscriptionL = "active"
+    subscription_expires_at: datetime | None = None
+    admin_notes: str = Field(default="", max_length=5000)
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    course_ids: list[int] = Field(default_factory=list)
+    group_ids: list[int] = Field(default_factory=list)
+
+
+class StudentUpdate(BaseModel):
+    student_code: str | None = Field(default=None, min_length=1, max_length=32)
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    email: EmailStr | None = None
+    guardian_phone: str | None = Field(default=None, max_length=40)
+    grade_level: Grade | None = None
+    student_type: StudentTypeL | None = None
+    subscription_status: SubscriptionL | None = None
+    subscription_expires_at: datetime | None = None
+    admin_notes: str | None = Field(default=None, max_length=5000)
+    is_active: bool | None = None
+
+
+class StudentGroupSummary(BaseModel):
+    id: int
+    name: str
+
+
+class StudentEnrollmentOut(BaseModel):
+    course_id: int
+    course_title: str
+    expires_at: datetime | None
+    source: Literal["direct", "group"] = "direct"
+
+
+class StudentRow(BaseModel):
+    id: int
+    full_name: str
+    student_code: str | None
+    email: str | None
+    grade_level: Grade | None
+    student_type: StudentTypeL
+    effective_subscription: SubscriptionL
+    guardian_phone: str
+    is_active: bool
+    last_login_at: datetime | None
+    groups_count: int
+    courses_count: int
+    total_points: int
+
+
+class StudentDetail(StudentRow):
+    admin_notes: str
+    subscription_status: SubscriptionL
+    subscription_expires_at: datetime | None
+    created_at: datetime
+    groups: list[StudentGroupSummary]
+    enrollments: list[StudentEnrollmentOut]
+
+
+class StudentCreateResponse(BaseModel):
+    student: StudentDetail
+    generated_password: str | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    generated_password: str | None = None
+
+
+class DeletePreviewOut(BaseModel):
+    enrollments: int
+    groups: int
+    attempts: int
+    attendance: int
+    points: int
+    progress: int
+
+
+BulkActionType = Literal["activate", "deactivate", "add_to_group", "remove_from_group", "enroll", "unenroll", "delete"]
+
+
+class StudentBulkAction(BaseModel):
+    student_ids: list[int] = Field(min_length=1, max_length=500)
+    action: BulkActionType
+    group_id: int | None = None
+    course_id: int | None = None
+    expires_at: datetime | None = None
+
+
+class StudentBulkResult(BaseModel):
+    affected: int
+
+
+class EnrollmentUpdate(BaseModel):
+    expires_at: datetime | None = None
+
+
+class ImportRowResult(BaseModel):
+    row_no: int
+    data: dict
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ImportPreviewOut(BaseModel):
+    rows: list[ImportRowResult]
+    valid_count: int
+    error_count: int
+
+
+class ImportCommitRequest(BaseModel):
+    rows: list[dict]
+
+
+class ImportCreatedRow(BaseModel):
+    row_no: int
+    id: int
+    student_code: str
+    full_name: str
+    generated_password: str | None = None
+
+
+class ImportFailedRow(BaseModel):
+    row_no: int
+    errors: list[str]
+
+
+class ImportCommitOut(BaseModel):
+    created: list[ImportCreatedRow]
+    failed: list[ImportFailedRow]
+
+
+class CredentialsRow(BaseModel):
+    student_code: str
+    full_name: str
+    password: str
+
+
+class CredentialsExportRequest(BaseModel):
+    rows: list[CredentialsRow]

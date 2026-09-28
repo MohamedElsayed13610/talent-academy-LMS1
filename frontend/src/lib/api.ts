@@ -18,8 +18,8 @@ export class ApiError extends Error {
 
   constructor(status: number, code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
-    this.status = status;
     this.code = code;
+    this.status = status;
     this.details = details;
   }
 }
@@ -30,38 +30,72 @@ function readCookie(name: string): string | null {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const method = (options.method || "GET").toUpperCase();
-  const headers = new Headers(options.headers);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+function withCsrf(method: string, headers: Headers): Headers {
   if (!SAFE_METHODS.has(method)) {
     const csrf = readCookie("csrf_token");
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
+  return headers;
+}
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, method, headers });
-
-  if (response.status === 204) return undefined as T;
-
+async function toApiError(response: Response): Promise<ApiError> {
   const isJson = response.headers.get("content-type")?.includes("application/json");
   const payload = isJson ? await response.json().catch(() => null) : null;
+  const err = payload?.error;
+  return new ApiError(response.status, err?.code || "UNKNOWN_ERROR", err?.message || "حدث خطأ غير متوقع", err?.details || {});
+}
 
-  if (!response.ok) {
-    const err = payload?.error;
-    throw new ApiError(
-      response.status,
-      err?.code || "UNKNOWN_ERROR",
-      err?.message || "حدث خطأ غير متوقع",
-      err?.details || {},
-    );
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = new Headers(options.headers);
+  // FormData sets its own multipart boundary — never override it with application/json.
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
   }
-  return payload as T;
+  withCsrf(method, headers);
+
+  const response = await fetch(`${API_URL}${path}`, { ...options, method, headers });
+  if (response.status === 204) return undefined as T;
+  if (!response.ok) throw await toApiError(response);
+
+  const isJson = response.headers.get("content-type")?.includes("application/json");
+  return (isJson ? await response.json().catch(() => null) : undefined) as T;
+}
+
+async function requestBlob(path: string, options: RequestInit = {}): Promise<{ blob: Blob; filename: string | null }> {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = new Headers(options.headers);
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  withCsrf(method, headers);
+
+  const response = await fetch(`${API_URL}${path}`, { ...options, method, headers });
+  if (!response.ok) throw await toApiError(response);
+  const disposition = response.headers.get("content-disposition");
+  const match = disposition?.match(/filename="?([^"]+)"?/);
+  return { blob: await response.blob(), filename: match?.[1] || null };
+}
+
+/** Triggers a browser "save file" for a blob response — used for every .xlsx download. */
+export function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const api = {
   get: <T,>(path: string) => request<T>(path),
-  post: <T,>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  put: <T,>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
-  patch: <T,>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
+  post: <T,>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
+  postForm: <T,>(path: string, form: FormData) => request<T>(path, { method: "POST", body: form }),
+  put: <T,>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined }),
+  patch: <T,>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body !== undefined ? JSON.stringify(body) : undefined }),
   delete: <T,>(path: string) => request<T>(path, { method: "DELETE" }),
+  getBlob: (path: string) => requestBlob(path),
+  postBlob: (path: string, body?: unknown) => requestBlob(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined }),
 };

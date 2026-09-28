@@ -68,6 +68,12 @@ class User(Base, TimestampMixin):
     admin_profile: Mapped["AdminProfile | None"] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    # GroupMembership has two FKs to users (user_id, added_by) — foreign_keys disambiguates which
+    # one this relationship follows. DB-level ON DELETE CASCADE (not this relationship's cascade)
+    # is what actually removes these rows when a student is deleted (services/students.py).
+    group_memberships: Mapped[list["GroupMembership"]] = relationship(
+        foreign_keys="GroupMembership.user_id", viewonly=True
+    )
 
     __table_args__ = (
         # Unique (academy_id, student_code) — case-insensitive handled at the app layer (code is

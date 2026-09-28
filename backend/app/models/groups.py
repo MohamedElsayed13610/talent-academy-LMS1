@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.identity import User
 
 
 class StudentGroup(Base, TimestampMixin):
@@ -28,6 +32,10 @@ class GroupMembership(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     added_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()")
+
+    # Two FKs to users (user_id, added_by) mean foreign_keys= is required to disambiguate.
+    group: Mapped["StudentGroup"] = relationship(foreign_keys=[group_id])
+    user: Mapped["User"] = relationship(foreign_keys=[user_id])
 
 
 class Enrollment(Base):
