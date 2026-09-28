@@ -186,3 +186,16 @@ def test_enrollment_put_and_delete(admin_client, db_session):
     delete = admin_client.delete(f"/api/v1/admin/students/{student.id}/enrollments/{course.id}")
     assert delete.status_code == 204
     assert db_session.query(Enrollment).filter(Enrollment.user_id == student.id).count() == 0
+
+
+def test_bulk_action_with_empty_student_ids_returns_standard_error_envelope(admin_client):
+    # Regression: FastAPI/Pydantic's own request-validation errors (student_ids min_length=1) used
+    # to bypass AppError and come back as {"detail": [...]}, not the documented {"error": {...}}
+    # envelope every client (lib/api.ts's toApiError) relies on for every endpoint.
+    response = admin_client.post("/api/v1/admin/students/bulk", json={"student_ids": [], "action": "add_to_group", "group_id": 1})
+    assert response.status_code == 422
+    body = response.json()
+    assert "error" in body
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert "detail" not in body
+    assert isinstance(body["error"]["message"], str) and body["error"]["message"]

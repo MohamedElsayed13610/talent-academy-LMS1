@@ -60,6 +60,11 @@ export default function AdminStudentsPage() {
   const deletePreview = useDeletePreview(deleteTarget?.id ?? null);
 
   const students = data?.items || [];
+  // Derived, not synced via an effect: the group-picker dialog can only be opened from the
+  // bulk-action bar (itself hidden once selected.size is 0), but if the selection empties out
+  // while it's still open (e.g. the user deselected everyone), this closes it on the next render
+  // instead of letting a stale "open" state allow a request with an empty student_ids.
+  const groupDialogOpen = bulkGroupOpen && selected.size > 0;
 
   function toggleAll() {
     if (selected.size === students.length) setSelected(new Set());
@@ -89,35 +94,65 @@ export default function AdminStudentsPage() {
 
   async function handleReset(password?: string) {
     if (!resetTarget) return;
-    const result = await resetPassword.mutateAsync({ id: resetTarget.id, password });
-    if (result.generated_password) setGeneratedPassword({ name: resetTarget.full_name, password: result.generated_password });
-    else toast.success("تم تحديث كلمة المرور");
-    setResetTarget(null);
+    try {
+      const result = await resetPassword.mutateAsync({ id: resetTarget.id, password });
+      if (result.generated_password) setGeneratedPassword({ name: resetTarget.full_name, password: result.generated_password });
+      else toast.success("تم تحديث كلمة المرور");
+      setResetTarget(null);
+    } catch {
+      // toast already shown globally (app/providers.tsx MutationCache)
+    }
   }
 
   async function handleDelete() {
     if (!deleteTarget) return;
-    await deleteStudent.mutateAsync(deleteTarget.id);
-    toast.success(`تم حذف ${deleteTarget.full_name}`);
-    setDeleteTarget(null);
+    try {
+      await deleteStudent.mutateAsync(deleteTarget.id);
+      toast.success(`تم حذف ${deleteTarget.full_name}`);
+      setDeleteTarget(null);
+    } catch {
+      // toast already shown globally
+    }
   }
 
+  // Both bulk actions guard against an empty selection before calling the API at all — the bar
+  // that exposes them is already hidden when nothing is selected, but this covers the dialog
+  // still being open after the selection changed underneath it (e.g. the user deselected
+  // everyone while "إضافة لمجموعة" was open).
   async function runBulk(action: "activate" | "deactivate" | "delete") {
-    const result = await bulkAction.mutateAsync({ student_ids: [...selected], action });
-    toast.success(`تم تنفيذ الإجراء على ${result.affected} طالب`);
-    setSelected(new Set());
+    if (selected.size === 0) return;
+    try {
+      const result = await bulkAction.mutateAsync({ student_ids: [...selected], action });
+      toast.success(`تم تنفيذ الإجراء على ${result.affected} طالب`);
+      setSelected(new Set());
+    } catch {
+      // toast already shown globally
+    }
   }
 
   async function addSelectedToGroup(groupId: number) {
-    const result = await bulkAction.mutateAsync({ student_ids: [...selected], action: "add_to_group", group_id: groupId });
-    toast.success(`تمت إضافة ${result.affected} طالب للمجموعة`);
-    setSelected(new Set());
-    setBulkGroupOpen(false);
+    if (selected.size === 0) {
+      toast.error("لم يتم تحديد أي طالب");
+      setBulkGroupOpen(false);
+      return;
+    }
+    try {
+      const result = await bulkAction.mutateAsync({ student_ids: [...selected], action: "add_to_group", group_id: groupId });
+      toast.success(`تمت إضافة ${result.affected} طالب للمجموعة`);
+      setSelected(new Set());
+      setBulkGroupOpen(false);
+    } catch {
+      // toast already shown globally
+    }
   }
 
   async function exportExcel() {
-    const { blob, filename } = await api.getBlob(`/admin/students/export.xlsx`);
-    saveBlob(blob, filename || "students.xlsx");
+    try {
+      const { blob, filename } = await api.getBlob(`/admin/students/export.xlsx`);
+      saveBlob(blob, filename || "students.xlsx");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر تصدير الملف");
+    }
   }
 
   return (
@@ -271,7 +306,7 @@ export default function AdminStudentsPage() {
         <StudentFormDrawer mode="create" loading={createStudent.isPending} error={createStudent.error as ApiError | null} onSubmit={handleCreate} />
       </Dialog>
 
-      <Dialog open={bulkGroupOpen} onOpenChange={setBulkGroupOpen}>
+      <Dialog open={groupDialogOpen} onOpenChange={setBulkGroupOpen}>
         <div className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-surface-raised p-6 shadow-[var(--shadow-3)]">
           <h2 className="text-h2">إضافة {selected.size} طالب لمجموعة</h2>
           <div className="mt-4 flex flex-col gap-2">

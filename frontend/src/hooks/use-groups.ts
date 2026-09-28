@@ -38,6 +38,8 @@ export function useCreateGroup() {
   return useMutation({
     mutationFn: (payload: { name: string; description?: string }) => api.post<AdminGroup>("/admin/groups", payload),
     onSuccess: () => invalidateGroups(queryClient),
+    // Rendered inline in the create-group dialog — skip the global toast (app/providers.tsx).
+    meta: { silent: true },
   });
 }
 

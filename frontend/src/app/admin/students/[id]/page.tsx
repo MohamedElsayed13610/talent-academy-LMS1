@@ -49,28 +49,44 @@ export default function StudentDetailPage() {
   if (error || !student) return <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل بيانات الطالب"} onRetry={() => refetch()} />;
 
   async function handleUpdate(payload: Parameters<typeof updateStudent.mutateAsync>[0]) {
-    await updateStudent.mutateAsync(payload);
-    toast.success("تم حفظ التعديلات");
+    try {
+      await updateStudent.mutateAsync(payload);
+      toast.success("تم حفظ التعديلات");
+    } catch {
+      // rendered inline via StudentFormFields' `error` prop (hooks/use-students.ts marks it silent)
+    }
   }
 
   async function handleReset() {
-    const result = await resetPassword.mutateAsync({ id: studentId });
-    if (result.generated_password) setGeneratedPassword(result.generated_password);
-    else toast.success("تم تحديث كلمة المرور");
+    try {
+      const result = await resetPassword.mutateAsync({ id: studentId });
+      if (result.generated_password) setGeneratedPassword(result.generated_password);
+      else toast.success("تم تحديث كلمة المرور");
+    } catch {
+      // toast already shown globally (app/providers.tsx MutationCache)
+    }
   }
 
   async function handleDelete() {
     const name = student?.full_name ?? "";
-    await deleteStudent.mutateAsync(studentId);
-    toast.success(`تم حذف ${name}`);
-    router.push("/admin/students");
+    try {
+      await deleteStudent.mutateAsync(studentId);
+      toast.success(`تم حذف ${name}`);
+      router.push("/admin/students");
+    } catch {
+      // toast already shown globally
+    }
   }
 
   async function addCourse() {
     if (!courseToAdd) return;
-    await enroll.mutateAsync({ studentId, courseId: Number(courseToAdd) });
-    setCourseToAdd("");
-    toast.success("تم إضافة الكورس");
+    try {
+      await enroll.mutateAsync({ studentId, courseId: Number(courseToAdd) });
+      setCourseToAdd("");
+      toast.success("تم إضافة الكورس");
+    } catch {
+      // toast already shown globally
+    }
   }
 
   const availableCourses = (courses || []).filter((c) => !student.enrollments.some((e) => e.course_id === c.id));

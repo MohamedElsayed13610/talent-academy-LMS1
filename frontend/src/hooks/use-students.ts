@@ -70,6 +70,9 @@ export function useCreateStudent() {
   return useMutation({
     mutationFn: (payload: StudentCreateInput) => api.post<StudentCreateResponse>("/admin/students", payload),
     onSuccess: () => invalidateStudents(queryClient),
+    // The create-student form renders this error inline (StudentFormFields' `error` prop) — skip
+    // the global toast so it isn't shown twice (see app/providers.tsx MutationCache).
+    meta: { silent: true },
   });
 }
 
@@ -78,6 +81,7 @@ export function useUpdateStudent(id: number) {
   return useMutation({
     mutationFn: (payload: StudentUpdateInput) => api.patch<StudentDetail>(`/admin/students/${id}`, payload),
     onSuccess: () => invalidateStudents(queryClient),
+    meta: { silent: true }, // rendered inline by StudentFormFields, same reasoning as useCreateStudent
   });
 }
 
@@ -129,6 +133,7 @@ export function useImportPreview() {
       form.append("file", file);
       return api.postForm<ImportPreview>("/admin/students/import/preview", form);
     },
+    meta: { silent: true }, // rendered inline in the import page, not as a global toast
   });
 }
 

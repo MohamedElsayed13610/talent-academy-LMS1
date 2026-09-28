@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { ArrowRight, CheckCircle2, Download, FileSpreadsheet, UploadCloud, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useImportCommit, useImportPreview } from "@/hooks/use-students";
-import { api, saveBlob } from "@/lib/api";
+import { api, ApiError, saveBlob } from "@/lib/api";
 import type { ImportCommitResult, ImportPreview } from "@/lib/types";
 
 export default function StudentImportPage() {
@@ -16,31 +17,49 @@ export default function StudentImportPage() {
   const previewMutation = useImportPreview();
   const commitMutation = useImportCommit();
 
+  // downloadTemplate/downloadCredentials call api.getBlob/postBlob directly (not through
+  // useMutation), so they get no automatic error handling at all — each needs its own try/catch.
   async function downloadTemplate() {
-    const { blob, filename } = await api.getBlob("/admin/students/import/template.xlsx");
-    saveBlob(blob, filename || "students-template.xlsx");
+    try {
+      const { blob, filename } = await api.getBlob("/admin/students/import/template.xlsx");
+      saveBlob(blob, filename || "students-template.xlsx");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر تحميل القالب");
+    }
   }
 
   async function onFileSelected(file: File) {
     setResult(null);
-    const data = await previewMutation.mutateAsync(file);
-    setPreview(data);
+    try {
+      const data = await previewMutation.mutateAsync(file);
+      setPreview(data);
+    } catch {
+      // rendered inline via previewMutation.error below (hooks/use-students.ts marks it silent)
+    }
   }
 
   async function commit() {
     if (!preview) return;
     const validRows = preview.rows.filter((r) => r.errors.length === 0).map((r) => r.data);
-    const data = await commitMutation.mutateAsync(validRows);
-    setResult(data);
-    setPreview(null);
+    try {
+      const data = await commitMutation.mutateAsync(validRows);
+      setResult(data);
+      setPreview(null);
+    } catch {
+      // toast already shown globally (app/providers.tsx MutationCache)
+    }
   }
 
   async function downloadCredentials() {
     if (!result) return;
     const rows = result.created.filter((r) => r.generated_password).map((r) => ({ student_code: r.student_code, full_name: r.full_name, password: r.generated_password as string }));
     if (!rows.length) return;
-    const { blob, filename } = await api.postBlob("/admin/students/credentials.xlsx", { rows });
-    saveBlob(blob, filename || "student-credentials.xlsx");
+    try {
+      const { blob, filename } = await api.postBlob("/admin/students/credentials.xlsx", { rows });
+      saveBlob(blob, filename || "student-credentials.xlsx");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر تحميل كلمات المرور");
+    }
   }
 
   return (

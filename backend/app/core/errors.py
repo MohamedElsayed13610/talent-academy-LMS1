@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -67,4 +68,21 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": "HTTP_ERROR", "message": str(exc.detail), "details": {}}},
+    )
+
+
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI/Pydantic request validation (bad body/query/path) bypasses AppError entirely and
+    uses its own {"detail": [...]} shape by default — every client, including lib/api.ts's
+    toApiError, only ever sees the {"error": {...}} envelope from here on, for every endpoint.
+    """
+    fields: list[str] = []
+    for err in exc.errors():
+        loc = [str(part) for part in err.get("loc", []) if part not in ("body", "query", "path")]
+        field = ".".join(loc) or "?"
+        fields.append(f"{field}: {err.get('msg', '')}")
+    message = f"بيانات غير صحيحة — {fields[0]}" if fields else "بيانات غير صحيحة"
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"error": {"code": "VALIDATION_ERROR", "message": message, "details": {"fields": fields}}},
     )

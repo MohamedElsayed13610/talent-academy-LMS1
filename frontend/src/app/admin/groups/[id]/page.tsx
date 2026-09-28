@@ -43,22 +43,34 @@ export default function GroupDetailPage() {
   if (error || !group) return <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل المجموعة"} onRetry={() => refetch()} />;
 
   async function previewGrade() {
-    const result = await addByGrade.mutateAsync({ gradeLevel: gradeChoice, dryRun: true });
-    setGradePreviewCount(result.would_add ?? 0);
+    try {
+      const result = await addByGrade.mutateAsync({ gradeLevel: gradeChoice, dryRun: true });
+      setGradePreviewCount(result.would_add ?? 0);
+    } catch {
+      // toast already shown globally (app/providers.tsx MutationCache)
+    }
   }
 
   async function confirmGrade() {
-    const result = await addByGrade.mutateAsync({ gradeLevel: gradeChoice, dryRun: false });
-    toast.success(`تمت إضافة ${result.added ?? 0} طالب`);
-    setGradeOpen(false);
-    setGradePreviewCount(null);
+    try {
+      const result = await addByGrade.mutateAsync({ gradeLevel: gradeChoice, dryRun: false });
+      toast.success(`تمت إضافة ${result.added ?? 0} طالب`);
+      setGradeOpen(false);
+      setGradePreviewCount(null);
+    } catch {
+      // toast already shown globally
+    }
   }
 
   async function assignSelectedCourse() {
     if (!courseToAssign) return;
-    await assignCourse.mutateAsync({ courseId: Number(courseToAssign) });
-    setCourseToAssign("");
-    toast.success("تم إسناد الكورس للمجموعة");
+    try {
+      await assignCourse.mutateAsync({ courseId: Number(courseToAssign) });
+      setCourseToAssign("");
+      toast.success("تم إسناد الكورس للمجموعة");
+    } catch {
+      // toast already shown globally
+    }
   }
 
   const availableCourses = (courses || []).filter((c) => !group.courses.some((gc) => gc.id === c.id));
