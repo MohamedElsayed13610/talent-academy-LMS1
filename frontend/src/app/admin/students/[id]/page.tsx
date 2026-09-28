@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -184,16 +184,16 @@ export default function StudentDetailPage() {
         }
       />
 
-      {generatedPassword ? (
-        <Dialog open onOpenChange={() => setGeneratedPassword(null)}>
-          <div className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-surface-raised p-6 text-center shadow-[var(--shadow-3)]">
-            <h2 className="text-h2">كلمة المرور الجديدة</h2>
+      <Dialog open={!!generatedPassword} onOpenChange={(open) => !open && setGeneratedPassword(null)}>
+        {generatedPassword ? (
+          <DialogContent className="max-w-sm text-center">
+            <DialogTitle>كلمة المرور الجديدة</DialogTitle>
             <p className="mt-1 text-body-sm text-text-muted">احفظها الآن — لن تظهر مرة أخرى.</p>
             <p className="ltr mt-4 rounded-md bg-surface-2 py-3 text-h1 tracking-wider">{generatedPassword}</p>
             <Button className="mt-4 w-full" onClick={() => setGeneratedPassword(null)}>تم</Button>
-          </div>
-        </Dialog>
-      ) : null}
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
