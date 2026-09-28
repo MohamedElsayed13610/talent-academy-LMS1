@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
@@ -324,8 +324,8 @@ export default function AdminStudentsPage() {
       </Dialog>
 
       <Dialog open={groupDialogOpen} onOpenChange={setBulkGroupOpen}>
-        <div className="fixed left-1/2 top-1/2 z-50 w-[92vw] max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-surface-raised p-6 shadow-[var(--shadow-3)]">
-          <h2 className="text-h2">إضافة {selected.size} طالب لمجموعة</h2>
+        <DialogContent className="max-w-sm">
+          <DialogTitle>إضافة {selected.size} طالب لمجموعة</DialogTitle>
           <div className="mt-4 flex flex-col gap-2">
             {(groupsPage?.items || []).map((g) => (
               <button key={g.id} onClick={() => addSelectedToGroup(g.id)} className="rounded-md border border-border px-3.5 py-2.5 text-start text-body-sm hover:bg-surface-2">
@@ -333,7 +333,7 @@ export default function AdminStudentsPage() {
               </button>
             ))}
           </div>
-        </div>
+        </DialogContent>
       </Dialog>
 
       <ResetPasswordDialog target={resetTarget} onClose={() => setResetTarget(null)} onReset={handleReset} loading={resetPassword.isPending} />
