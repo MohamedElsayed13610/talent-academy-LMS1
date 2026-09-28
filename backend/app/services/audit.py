@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
@@ -32,7 +33,7 @@ def record_audit(
             action=action,
             entity_type=entity_type,
             entity_id=str(entity_id),
-            summary=summary or {},
+            summary=jsonable_encoder(summary or {}),
             ip=ip[:64],
         )
     )
