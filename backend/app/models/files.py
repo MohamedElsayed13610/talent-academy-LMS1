@@ -42,8 +42,14 @@ class PendingFileDeletion(Base):
     file_id: Mapped[str] = mapped_column(String(36))  # no FK — the files row may already be gone
     bucket: Mapped[str] = mapped_column(String(80))
     storage_key: Mapped[str] = mapped_column(String(300))
-    reason: Mapped[str] = mapped_column(String(120), default="")
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    last_error: Mapped[str] = mapped_column(String(500), default="")
+    # server_default (not just the ORM-side default=) is required on every one of these: the
+    # file-deletion triggers INSERT into this table with raw SQL that only sets
+    # (file_id, bucket, storage_key, reason) -- any NOT NULL column missing from that column list
+    # needs a database-level default or the trigger's INSERT violates NOT NULL and the delete that
+    # fired it rolls back entirely. Found by actually running the trigger in a test, not just
+    # reading the migration -- Base.metadata.create_all() only emits what's declared here.
+    reason: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_error: Mapped[str] = mapped_column(String(500), default="", server_default="")
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()")

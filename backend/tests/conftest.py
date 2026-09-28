@@ -4,8 +4,11 @@ CI runs a Postgres service container for the same reason (docs/ARCHITECTURE.md �
 """
 
 import os
+from pathlib import Path
 
 import pytest
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -24,8 +27,16 @@ from app.core.rate_limit import rate_limiter  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models.academy import Academy, AcademySettings  # noqa: E402
 from app.models.identity import AdminProfile, User, UserRole  # noqa: E402
+
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _alembic_config() -> AlembicConfig:
+    cfg = AlembicConfig(str(_BACKEND_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_BACKEND_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    return cfg
 
 
 @pytest.fixture(scope="session")
@@ -51,23 +62,35 @@ def db_session(engine):
     # app/db/scope.py); each test gets a freshly recreated academies table, so the cache from a
     # previous test must not leak in.
     scope_module._DEFAULT_ACADEMY_ID = None
+
+    # Runs the *real* Alembic migration rather than Base.metadata.create_all(). This matters:
+    # create_all() only knows about SQLAlchemy-mapped tables/columns/constraints — it silently
+    # skips the raw-SQL trigger functions the migration creates (the file-deletion queueing
+    # triggers on lesson_materials/exam_questions/courses/academy_settings). A test asserting on
+    # pending_file_deletions rows would pass or fail based on whether the trigger *code* is
+    # correct, but never actually exercise it, since it was never installed. Base.metadata.drop_all
+    # doesn't touch Alembic's own alembic_version bookkeeping table, so that's dropped by hand too
+    # — otherwise the second test's upgrade("head") would see "already at head" and do nothing.
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    alembic_command.upgrade(_alembic_config(), "head")
+
+    # The migration itself seeds one academy + academy_settings row (ARCHITECTURE.md §2: "single
+    # academy row" default data) — don't add a second one here, or get_default_academy_id() would
+    # have two rows to pick from (harmlessly picks the lower id, but it's confusing cruft).
     TestSession = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
     session = TestSession()
-    academy = Academy(name="Talent Academy", slug="talent-academy")
-    session.add(academy)
-    session.flush()
-    session.add(AcademySettings(academy_id=academy.id))
-    session.commit()
     try:
         yield session
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
         scope_module._DEFAULT_ACADEMY_ID = None
 
 

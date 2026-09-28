@@ -301,3 +301,27 @@ def test_youtube_recording_produces_embed_url(admin_client, client, db_session):
     recording = response.json()["recording"]
     assert recording["kind"] == "youtube"
     assert recording["embed_url"] == "https://www.youtube-nocookie.com/embed/abc123XYZ"
+
+
+def test_deleting_a_material_with_an_uploaded_file_queues_cleanup(admin_client, db_session, fake_s3):
+    # Regression: pending_file_deletions.attempts/last_error/reason lacked a DB-level default, so
+    # the file-deletion trigger's raw-SQL INSERT (which only sets file_id/bucket/storage_key/reason)
+    # violated NOT NULL -- and in Postgres, a failing trigger rolls back the entire statement that
+    # fired it, not just the insert. Every delete of a row with a file reference (lesson_materials,
+    # exam_questions, courses, academy_settings) was silently failing outright since Phase 1; this
+    # was never caught because no earlier test attached a real file to what it deleted.
+    upload = admin_client.post("/api/v1/admin/files", files={"file": ("notes.pdf", FAKE_PDF, "application/pdf")}, data={"purpose": "material_pdf"})
+    file_id = upload.json()["id"]
+
+    course = _make_course(db_session)
+    section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson = admin_client.post(f"/api/v1/admin/sections/{section['id']}/lessons", json={"title": "L1"}).json()["sections"][0]["lessons"][0]
+    material = admin_client.post(f"/api/v1/admin/lessons/{lesson['id']}/materials", json={"title": "Notes", "material_type": "file", "file_id": file_id})
+    material_id = material.json()["sections"][0]["lessons"][0]["materials"][0]["id"]
+
+    from app.models.files import PendingFileDeletion
+
+    response = admin_client.delete(f"/api/v1/admin/materials/{material_id}")
+    assert response.status_code == 200, response.text
+    assert response.json()["sections"][0]["lessons"][0]["materials"] == []
+    assert db_session.query(PendingFileDeletion).filter(PendingFileDeletion.file_id == file_id).count() == 1
