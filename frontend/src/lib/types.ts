@@ -408,3 +408,128 @@ export interface JoinResponse {
   join_url: string;
   attendance_status: "present" | "late" | "absent" | "excused";
 }
+
+// -------------------------------------------------------------------------------------- exams ----
+
+export type ExamMode = "full" | "answer_sheet";
+export type QuestionType = "image_mcq" | "text_mcq" | "bubble";
+export type Difficulty = "easy" | "medium" | "hard";
+export type ChoiceLabel = "A" | "B" | "C" | "D";
+export type ExamState = "draft" | "upcoming" | "available" | "ended";
+
+export interface ExamIn {
+  title: string;
+  description?: string;
+  course_id: number;
+  group_id?: number | null;
+  exam_mode?: ExamMode;
+  duration_minutes?: number;
+  passing_score?: number;
+  max_attempts?: number;
+  starts_at?: string | null;
+  ends_at?: string | null;
+}
+
+export type ExamPatch = Partial<ExamIn>;
+
+export interface AdminExamRow {
+  id: number;
+  title: string;
+  course_title: string;
+  group_name: string | null;
+  exam_mode: ExamMode;
+  state: ExamState;
+  question_count: number;
+  total_points: number;
+  attempts_count: number;
+  average_score: number | null;
+  locked_count: number;
+  starts_at: string | null;
+  ends_at: string | null;
+}
+
+export interface ExamChoiceOut {
+  id: number;
+  label: ChoiceLabel;
+  text: string;
+  is_correct: boolean;
+}
+
+export interface ExamQuestionOut {
+  id: number;
+  question_type: QuestionType;
+  position: number;
+  prompt_text: string;
+  image_url: string | null;
+  topic: string;
+  difficulty: Difficulty;
+  points: number;
+  choices: ExamChoiceOut[];
+}
+
+export interface AdminExamDetail {
+  id: number;
+  title: string;
+  description: string;
+  course_id: number;
+  course_title: string;
+  group_id: number | null;
+  group_name: string | null;
+  exam_mode: ExamMode;
+  duration_minutes: number;
+  passing_score: number;
+  max_attempts: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  is_published: boolean;
+  published_at: string | null;
+  state: ExamState;
+  has_attempts: boolean;
+  question_count: number;
+  total_points: number;
+  questions: ExamQuestionOut[];
+}
+
+export interface ExamDeletePreview {
+  questions: number;
+  attempts: number;
+  answers: number;
+  points_entries: number;
+}
+
+export interface ChoiceIn {
+  label: ChoiceLabel;
+  text: string;
+}
+
+export interface TextQuestionIn {
+  question_type: "text_mcq";
+  prompt_text: string;
+  choices: ChoiceIn[];
+  correct_label: ChoiceLabel;
+  topic?: string;
+  difficulty?: Difficulty;
+  points?: number;
+}
+
+export interface QuestionPatch {
+  prompt_text?: string;
+  topic?: string;
+  difficulty?: Difficulty;
+  points?: number;
+  choices?: ChoiceIn[];
+  correct_label?: ChoiceLabel;
+}
+
+export interface AnswerKeyPreview {
+  parsed: ChoiceLabel[];
+  count: number;
+  question_count: number;
+  errors: string[];
+}
+
+export interface AnswerKeyApplyIn {
+  answers: string;
+  points_per_question?: number | null;
+  publish?: boolean;
+}
