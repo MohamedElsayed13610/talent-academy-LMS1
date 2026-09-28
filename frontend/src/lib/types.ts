@@ -320,3 +320,91 @@ export interface LessonDetail {
   next_id: number | null;
   completed: boolean;
 }
+
+// ------------------------------------------------------------------------ live sessions ----
+
+export type AttendanceStatus = "present" | "late" | "absent" | "excused" | "unmarked";
+export type LiveSessionStatusFilter = "upcoming" | "live" | "ended";
+
+export interface LiveSessionIn {
+  title: string;
+  description?: string;
+  course_id: number;
+  group_id?: number | null;
+  provider?: string;
+  join_url: string;
+  starts_at: string;
+  ends_at: string;
+  recording_url?: string | null;
+  is_active?: boolean;
+}
+
+export type LiveSessionPatch = Partial<LiveSessionIn>;
+
+export interface AttendanceSummary {
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  unmarked: number;
+}
+
+export interface AdminLiveSession {
+  id: number;
+  title: string;
+  description: string;
+  course_id: number;
+  course_title: string;
+  group_id: number | null;
+  group_name: string | null;
+  provider: string;
+  join_url: string;
+  starts_at: string;
+  ends_at: string;
+  recording_url: string | null;
+  is_active: boolean;
+  attendance_finalized_at: string | null;
+  audience_count: number;
+  attendance: AttendanceSummary;
+}
+
+export interface AttendanceRow {
+  student_id: number;
+  full_name: string;
+  student_code: string | null;
+  grade_level: string | null;
+  status: AttendanceStatus;
+  source: string | null;
+  joined_at: string | null;
+  note: string;
+}
+
+export interface AttendanceSheet {
+  session: AdminLiveSession;
+  counts: AttendanceSummary;
+  students: AttendanceRow[];
+}
+
+export interface MyAttendance {
+  status: AttendanceStatus;
+  joined_at: string | null;
+}
+
+export interface LiveSessionCard {
+  id: number;
+  title: string;
+  course_id: number;
+  course_title: string;
+  provider: string;
+  starts_at: string;
+  ends_at: string;
+  recording_url: string | null;
+  can_join: boolean;
+  join_opens_at: string;
+  my_attendance: MyAttendance;
+}
+
+export interface JoinResponse {
+  join_url: string;
+  attendance_status: "present" | "late" | "absent" | "excused";
+}
