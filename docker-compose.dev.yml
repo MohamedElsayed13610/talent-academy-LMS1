@@ -1,0 +1,70 @@
+name: talent-academy-lms-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: talent
+      POSTGRES_PASSWORD: talent
+      POSTGRES_DB: talent
+    ports:
+      - "5432:5432"
+    volumes:
+      - talent_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U talent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible stand-in for Cloudflare R2 in local dev (ARCHITECTURE.md §10).
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: talent-dev
+      MINIO_ROOT_PASSWORD: talent-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - talent_minio_data:/data
+
+  backend:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://talent:talent@postgres:5432/talent
+      SECRET_KEY: dev-only-change-this-secret-key-please-replace
+      FRONTEND_URL: http://localhost:3000
+      ENVIRONMENT: development
+      SEED_DEV_DATA: "true"
+      R2_ENDPOINT_URL: http://minio:9000
+      R2_ACCESS_KEY_ID: talent-dev
+      R2_SECRET_ACCESS_KEY: talent-dev-secret
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    command: sh -c "alembic upgrade head && python -m app.cli.seed_dev; uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      NEXT_PUBLIC_API_URL: /api/v1
+      BACKEND_INTERNAL_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm run dev"
+
+volumes:
+  talent_pg_data:
+  talent_minio_data:

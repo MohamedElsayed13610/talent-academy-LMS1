@@ -1,0 +1,43 @@
+# Reference material (prototype + spec copies), not part of the new project
+refrence/
+
+# Python
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.venv/
+backend/venv/
+backend/*.egg-info/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/htmlcov/
+backend/.coverage
+*.pyc
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/next-env.d.ts
+frontend/*.tsbuildinfo
+frontend/.turbo/
+
+# Env files
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+!backend/.env.example
+
+# Local data
+*.db
+*.sqlite3
+docker-compose.override.yml
+.data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
