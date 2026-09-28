@@ -130,6 +130,14 @@ export default function AdminStudentsPage() {
     }
   }
 
+  // Guards the dialog open itself, not just what happens after — so even a stale/late click that
+  // somehow still reaches this handler (the button is also `disabled` below, belt and suspenders)
+  // can never open it with nothing selected.
+  function openGroupDialog() {
+    if (selected.size === 0) return;
+    setBulkGroupOpen(true);
+  }
+
   async function addSelectedToGroup(groupId: number) {
     if (selected.size === 0) {
       toast.error("لم يتم تحديد أي طالب");
@@ -215,17 +223,26 @@ export default function AdminStudentsPage() {
         </Select>
       </section>
 
-      {selected.size > 0 ? (
-        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md bg-primary-soft px-4 py-3">
-          <span className="text-body-sm font-medium text-primary-soft-fg">{selected.size} محدد</span>
-          <Button size="sm" variant="secondary" onClick={() => setBulkGroupOpen(true)}><UsersRound size={15} /> إضافة لمجموعة</Button>
-          <Button size="sm" variant="secondary" onClick={() => runBulk("activate")}>تفعيل</Button>
-          <Button size="sm" variant="secondary" onClick={() => runBulk("deactivate")}>إيقاف</Button>
-          <Button size="sm" variant="danger" onClick={() => { if (confirm(`حذف ${selected.size} طالب نهائيًا؟`)) runBulk("delete"); }}>
-            <Trash2 size={15} /> حذف
-          </Button>
-        </div>
-      ) : null}
+      {/* Always rendered (not just when selected.size > 0) — per explicit request, the bulk
+          buttons must be visibly present but disabled with nothing selected, not conditionally
+          absent. `disabled` is real DOM/browser-enforced, so no click ever reaches the handlers
+          below regardless of any state/race-condition bug in this component. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md bg-primary-soft px-4 py-3">
+        <span className="text-body-sm font-medium text-primary-soft-fg">{selected.size} محدد</span>
+        <Button size="sm" variant="secondary" disabled={selected.size === 0} onClick={openGroupDialog}>
+          <UsersRound size={15} /> إضافة لمجموعة
+        </Button>
+        <Button size="sm" variant="secondary" disabled={selected.size === 0} onClick={() => runBulk("activate")}>تفعيل</Button>
+        <Button size="sm" variant="secondary" disabled={selected.size === 0} onClick={() => runBulk("deactivate")}>إيقاف</Button>
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={selected.size === 0}
+          onClick={() => { if (confirm(`حذف ${selected.size} طالب نهائيًا؟`)) runBulk("delete"); }}
+        >
+          <Trash2 size={15} /> حذف
+        </Button>
+      </div>
 
       <section className="mt-4">
         {error ? <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل الطلاب"} onRetry={() => refetch()} /> : null}
