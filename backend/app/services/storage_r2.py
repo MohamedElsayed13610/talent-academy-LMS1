@@ -46,10 +46,10 @@ def sniff_content_type(content: bytes) -> str | None:
     return None
 
 
-def _client():
+def _client(endpoint_url: str | None = None):
     return boto3.client(
         "s3",
-        endpoint_url=settings.r2_endpoint_url,
+        endpoint_url=endpoint_url or settings.r2_endpoint_url,
         aws_access_key_id=settings.r2_access_key_id,
         aws_secret_access_key=settings.r2_secret_access_key,
         region_name=settings.r2_region,
@@ -84,7 +84,10 @@ def delete_object(bucket: str, key: str) -> bool:
 
 
 def presigned_get_url(bucket: str, key: str, expires_in: int = 300) -> str:
-    return _client().generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in)
+    public_endpoint = settings.r2_public_endpoint_url or settings.r2_endpoint_url
+    return _client(public_endpoint).generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=expires_in
+    )
 
 
 def new_storage_key(academy_id: int, purpose: str, ext: str) -> str:
