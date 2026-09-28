@@ -50,6 +50,11 @@ class ValidationAppError(AppError):
         super().__init__(status.HTTP_422_UNPROCESSABLE_ENTITY, code, message, **kw)
 
 
+class GoneError(AppError):
+    def __init__(self, code: str = "GONE", message: str = "لم يعد هذا متاحًا", **kw: Any) -> None:
+        super().__init__(status.HTTP_410_GONE, code, message, **kw)
+
+
 class RateLimitedError(AppError):
     def __init__(self, code: str = "RATE_LIMITED", message: str = "محاولات كثيرة جدًا، حاول لاحقًا", **kw: Any) -> None:
         super().__init__(status.HTTP_429_TOO_MANY_REQUESTS, code, message, **kw)
