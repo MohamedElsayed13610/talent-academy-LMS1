@@ -19,7 +19,7 @@ services:
 
   # S3-compatible stand-in for Cloudflare R2 in local dev (ARCHITECTURE.md §10).
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: talent-dev
