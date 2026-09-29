@@ -21,6 +21,7 @@ import type { AdminExamDetail } from "@/lib/types";
 import { QuestionsTab } from "./questions-tab";
 import { AnswerKeyTab } from "./answer-key-tab";
 import { PassagesTab } from "./passages-tab";
+import { AttemptsTab } from "./attempts-tab";
 
 const STATE_LABEL: Record<string, string> = { draft: "مسودة", upcoming: "قادم", available: "متاح", ended: "انتهى" };
 const STATE_TONE: Record<string, "neutral" | "info" | "success" | "danger"> = { draft: "neutral", upcoming: "info", available: "success", ended: "danger" };
@@ -118,6 +119,7 @@ export default function ExamBuilderPage() {
           <TabsTrigger value="questions">الأسئلة ({exam.question_count})</TabsTrigger>
           <TabsTrigger value="passages">المقاطع ({exam.passages.length})</TabsTrigger>
           <TabsTrigger value="answer-key">مفتاح الإجابة</TabsTrigger>
+          <TabsTrigger value="attempts">المحاولات</TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings" className="mt-5">
@@ -131,6 +133,9 @@ export default function ExamBuilderPage() {
         </TabsContent>
         <TabsContent value="answer-key" className="mt-5">
           <AnswerKeyTab exam={exam} />
+        </TabsContent>
+        <TabsContent value="attempts" className="mt-5">
+          <AttemptsTab exam={exam} />
         </TabsContent>
       </Tabs>
 

@@ -656,3 +656,91 @@ export interface ExamResult {
   submitted_at: string | null;
   points_awarded: number;
 }
+
+// ------------------------------------------------------------------- admin attempt management ----
+
+export interface AttemptStudentOut {
+  id: number;
+  full_name: string;
+  student_code: string | null;
+  grade_level: string | null;
+}
+
+export interface AdminAttemptRow {
+  attempt_id: number;
+  student: AttemptStudentOut;
+  attempt_no: number;
+  status: AttemptStatus;
+  violation_count: number;
+  started_at: string;
+  expires_at: string;
+  submitted_at: string | null;
+  answered_count: number;
+  question_count: number;
+  percentage: number | null;
+}
+
+export interface AdminAttemptEventOut {
+  id: number;
+  event_type: string;
+  detail: string;
+  actor_id: number | null;
+  actor_name: string | null;
+  ip: string;
+  created_at: string;
+}
+
+export interface AdminAttemptAnswerOut {
+  question_id: number;
+  position: number;
+  prompt_text: string;
+  question_type: string;
+  points: number;
+  choice_id: number | null;
+  choice_label: string | null;
+  correct_label: string | null;
+  is_correct: boolean;
+  awarded_points: number;
+}
+
+export interface AdminAttemptDetail {
+  attempt_id: number;
+  exam_id: number;
+  exam_title: string;
+  student: AttemptStudentOut;
+  attempt_no: number;
+  status: AttemptStatus;
+  started_at: string;
+  expires_at: string;
+  submitted_at: string | null;
+  submit_source: string | null;
+  violation_count: number;
+  violation_limit: number;
+  lock_reason: string;
+  locked_at: string | null;
+  extra_minutes: number;
+  score_points: number;
+  total_points: number;
+  percentage: number;
+  passed: boolean;
+  granted_by: number | null;
+  granted_reason: string;
+  superseded_by_id: number | null;
+  events: AdminAttemptEventOut[];
+  answers: AdminAttemptAnswerOut[];
+}
+
+export interface UnlockAttemptIn {
+  reason: string;
+  extra_minutes?: number;
+}
+
+export interface ExtraTimeIn {
+  reason: string;
+  minutes: number;
+}
+
+export interface NewAttemptIn {
+  reason: string;
+  extra_minutes?: number;
+}

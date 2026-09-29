@@ -3,12 +3,13 @@
 import Image from "next/image";
 import { useRouter, useParams } from "next/navigation";
 import {
-  AlertTriangle, BookOpen, CheckCircle2, ChevronDown, ChevronUp, Clock, Expand, Lock, Trophy,
+  AlertTriangle, BookOpen, CheckCircle2, ChevronDown, ChevronUp, Clock, Expand, Lock, ShieldAlert, Trophy,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAttempt, useAutosaveAnswers, useReportViolation, useSubmitAttempt } from "@/hooks/use-student-exams";
@@ -77,6 +78,37 @@ function ResultScreen({ result }: { result: ExamResult }) {
   );
 }
 
+const VIOLATION_LABEL: Record<ViolationType, string> = {
+  page_hidden: "غادرت صفحة الامتحان أو بدّلت التطبيق",
+  window_blur: "خرجت من نافذة الامتحان",
+  fullscreen_exit: "خرجت من وضع ملء الشاشة",
+};
+
+// Centered modal (not just a toast) shown every time a violation is recorded, per the product
+// requirement -- explains what was detected and the running count, in Arabic, on desktop and
+// mobile alike. Dismissible (Escape/outside click/"فهمت") since the point is that the student
+// notices and returns to the exam, not that they're trapped.
+function ViolationModal({ info, onClose }: { info: { type: ViolationType; count: number; limit: number }; onClose: () => void }) {
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="text-center">
+        <DialogHeader>
+          <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-danger-soft text-danger-fg">
+            <ShieldAlert size={26} />
+          </div>
+          <DialogTitle className="mt-2">تم رصد مخالفة</DialogTitle>
+          <DialogDescription>{VIOLATION_LABEL[info.type]}. هذا يُحتسب كمخالفة أثناء الامتحان.</DialogDescription>
+        </DialogHeader>
+        <p className="text-body-sm">
+          عدد المخالفات: <strong className="text-danger-fg">{info.count}</strong> من {info.limit}.
+          {info.count >= info.limit - 1 ? " مخالفة إضافية واحدة ستؤدي لقفل المحاولة." : " تجاوز الحد المسموح يؤدي لقفل المحاولة تلقائيًا."}
+        </p>
+        <Button className="mt-2 w-full" onClick={onClose}>فهمت، أكمل الامتحان</Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // -------------------------------------------------------------------------------- active runner ----
 
 function toAnswerList(answers: Record<number, number | null>): AnswerIn[] {
@@ -98,6 +130,7 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
   });
   const [currentIndex, setCurrentIndex] = useState(0);
   const [violationCount, setViolationCount] = useState(initial.violation_count);
+  const [violationModal, setViolationModal] = useState<{ type: ViolationType; count: number; limit: number } | null>(null);
   const [locked, setLocked] = useState(false);
   const [closedStatus, setClosedStatus] = useState<"submitted" | "expired" | null>(null);
   const [result, setResult] = useState<ExamResult | null>(null);
@@ -192,15 +225,37 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   // -------------------------------------------------------------------------- anti-cheat reporting ----
 
+  // Client-side dedupe on top of the server's own 3s debounce: switching tabs fires both
+  // visibilitychange *and* blur for the same real action, and a stray extra event within the same
+  // instant shouldn't cost a second network request (the server would just discard it anyway, but
+  // this avoids sending it at all and avoids two near-simultaneous modals for one leave).
+  const lastViolationSentAtRef = useRef(0);
+  const violationCountRef = useRef(initial.violation_count);
+  useEffect(() => {
+    violationCountRef.current = violationCount;
+  }, [violationCount]);
+
   const reportViolation = useCallback(async (type: ViolationType) => {
+    const now = Date.now();
+    if (now - lastViolationSentAtRef.current < 3000) return;
+    lastViolationSentAtRef.current = now;
+    const previousCount = violationCountRef.current;
     try {
       const res = await reportViolationMutation.mutateAsync({ type, wasOffline: !navigator.onLine });
       setViolationCount(res.violation_count);
-      if (res.locked) setLocked(true);
+      if (res.locked) {
+        // A locked response already switches the whole screen to LockedScreen below -- that full
+        // takeover is the warning, so no separate modal is needed on top of it.
+        setLocked(true);
+      } else if (res.violation_count > previousCount) {
+        // The server ignores a report while offline (network loss isn't a violation) -- only pop
+        // the modal when the count actually moved.
+        setViolationModal({ type, count: res.violation_count, limit: initial.violation_limit });
+      }
     } catch {
       // best-effort — the server debounces/ignores duplicates on its own
     }
-  }, [reportViolationMutation]);
+  }, [reportViolationMutation, initial.violation_limit]);
 
   useEffect(() => {
     if (!active) return;
@@ -335,6 +390,8 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
             : "لا يمكن التراجع بعد التسليم. هل أنت متأكد؟"
         }
       />
+
+      {violationModal ? <ViolationModal info={violationModal} onClose={() => setViolationModal(null)} /> : null}
     </div>
   );
 }
