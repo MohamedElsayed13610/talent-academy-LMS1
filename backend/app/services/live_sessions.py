@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from fastapi import Request
 from openpyxl import Workbook
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, GoneError, NotFoundError
@@ -50,6 +50,43 @@ def audience_ids(db: Session, course_id: int, group_id: int | None) -> set[int]:
         member_ids = set(db.scalars(select(GroupMembership.user_id).where(GroupMembership.group_id == group_id)).all())
         return base & member_ids
     return base
+
+
+# --------------------------------------------------------------------- per-student attendance ----
+
+def _rate(present: int, late: int, total: int) -> int:
+    # "Attended" = present or late (they showed up, on time or not); absent/excused don't count
+    # toward the rate, and unmarked sessions are excluded from `total` entirely.
+    return round((present + late) / total * 100) if total else 0
+
+
+def attendance_summary_for_student(db: Session, user_id: int) -> dict:
+    rows = db.execute(select(AttendanceRecord.status, func.count()).where(AttendanceRecord.user_id == user_id).group_by(AttendanceRecord.status)).all()
+    counts = {status.value: count for status, count in rows}
+    present, late, absent, excused = counts.get("present", 0), counts.get("late", 0), counts.get("absent", 0), counts.get("excused", 0)
+    total = present + late + absent + excused
+    return {"total": total, "present": present, "absent": absent, "late": late, "excused": excused, "rate": _rate(present, late, total)}
+
+
+def attendance_summary_by_user(db: Session, user_ids: list[int]) -> dict[int, dict]:
+    """Batched version of attendance_summary_for_student() for a page of students at once (admin
+    reports list) -- one grouped query instead of one query per student."""
+    if not user_ids:
+        return {}
+    rows = db.execute(
+        select(AttendanceRecord.user_id, AttendanceRecord.status, func.count())
+        .where(AttendanceRecord.user_id.in_(user_ids)).group_by(AttendanceRecord.user_id, AttendanceRecord.status)
+    ).all()
+    by_user: dict[int, dict[str, int]] = {}
+    for user_id, status, count in rows:
+        by_user.setdefault(user_id, {})[status.value] = count
+    out: dict[int, dict] = {}
+    for user_id in user_ids:
+        counts = by_user.get(user_id, {})
+        present, late, absent, excused = counts.get("present", 0), counts.get("late", 0), counts.get("absent", 0), counts.get("excused", 0)
+        total = present + late + absent + excused
+        out[user_id] = {"total": total, "present": present, "absent": absent, "late": late, "excused": excused, "rate": _rate(present, late, total)}
+    return out
 
 
 # ---------------------------------------------------------------------------- points matrix ----

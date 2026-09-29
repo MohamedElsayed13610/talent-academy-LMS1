@@ -143,7 +143,7 @@ def list_my_exams(db: Session, academy_id: int, user: User) -> list[StudentExamC
         return []
     course_titles = dict(db.execute(select(Course.id, Course.title).where(Course.id.in_({e.course_id for e in eligible}))).all())
     group_ids = {e.group_id for e in eligible if e.group_id}
-    group_names = dict(db.execute(select(StudentGroup.id, StudentGroup.name).where(StudentGroup.id.in_(group_ids)))) if group_ids else {}
+    group_names = dict(db.execute(select(StudentGroup.id, StudentGroup.name).where(StudentGroup.id.in_(group_ids))).all()) if group_ids else {}
     return [_card(db, user, e, course_titles.get(e.course_id, ""), group_names.get(e.group_id) if e.group_id else None) for e in eligible]
 
 

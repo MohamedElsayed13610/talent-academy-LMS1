@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_academy_id, require_admin
@@ -19,6 +19,7 @@ from app.schemas.exams import (
     ExamDeletePreview,
     ExamIn,
     ExamPatch,
+    ExamResultRow,
     OrderIn,
     PassageIn,
     PassagePatch,
@@ -120,6 +121,20 @@ def preview_answer_key(exam_id: int, payload: AnswerKeyPreviewIn, _: User = Depe
 def apply_answer_key(exam_id: int, payload: AnswerKeyApplyIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
     exam = svc.get_exam_or_404(db, academy_id, exam_id)
     return svc.apply_answer_key(db, academy_id, exam, payload.answers, payload.points_per_question, payload.publish, admin, request)
+
+
+@router.get("/{exam_id}/results", response_model=list[ExamResultRow])
+def exam_results(exam_id: int, status: str | None = None, _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    exam = svc.get_exam_or_404(db, academy_id, exam_id)
+    return svc.exam_results(db, exam, status)
+
+
+@router.get("/{exam_id}/results.xlsx")
+def exam_results_xlsx(exam_id: int, status: str | None = None, _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    exam = svc.get_exam_or_404(db, academy_id, exam_id)
+    rows = svc.exam_results(db, exam, status)
+    content = svc.export_exam_results_xlsx(exam, rows)
+    return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=results-{exam_id}.xlsx"})
 
 
 @router.get("/{exam_id}/attempts", response_model=Page[AdminAttemptRow])

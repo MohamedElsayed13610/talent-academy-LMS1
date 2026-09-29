@@ -50,6 +50,8 @@ from app.schemas.exams import (
     ExamPatch,
     ExamPassageOut,
     ExamQuestionOut,
+    ExamResultLatestOut,
+    ExamResultRow,
     PassageIn,
     PassagePatch,
     QuestionImageMeta,
@@ -130,7 +132,7 @@ def list_exams(db: Session, academy_id: int, q: str | None, course_id: int | Non
     exam_ids = [e.id for e in page_items]
     course_titles = dict(db.execute(select(Course.id, Course.title).where(Course.id.in_({e.course_id for e in page_items}))).all())
     group_ids = {e.group_id for e in page_items if e.group_id}
-    group_names = dict(db.execute(select(StudentGroup.id, StudentGroup.name).where(StudentGroup.id.in_(group_ids)))) if group_ids else {}
+    group_names = dict(db.execute(select(StudentGroup.id, StudentGroup.name).where(StudentGroup.id.in_(group_ids))).all()) if group_ids else {}
 
     qc_rows = db.execute(
         select(ExamQuestion.exam_id, func.count(ExamQuestion.id), func.coalesce(func.sum(ExamQuestion.points), 0))
@@ -607,3 +609,74 @@ def set_passage_questions(db: Session, academy_id: int, exam: Exam, passage: Exa
     record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.set_questions", entity_type="exam_passage", entity_id=str(passage.id), summary={"question_ids": question_ids}, request=request)
     db.commit()
     return exam_detail(db, exam)
+
+
+# ----------------------------------------------------------------------------------- results ----
+
+def exam_results(db: Session, exam: Exam, status_filter: str | None) -> list[ExamResultRow]:
+    """Every eligible student for this exam (the exam's audience -- course access intersected with
+    its group when set, same rule as a live session's audience), not just the ones who attempted
+    it, per ARCHITECTURE.md §5.2's /admin/exams/{id}/results (a student who never took it shows up
+    as status="not_taken" with no attempts)."""
+    from app.models.exams import AttemptStatus
+    from app.services.live_sessions import audience_ids
+
+    student_ids = audience_ids(db, exam.course_id, exam.group_id)
+    if not student_ids:
+        return []
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(student_ids)))}
+
+    attempts = db.scalars(select(ExamAttempt).where(ExamAttempt.exam_id == exam.id, ExamAttempt.user_id.in_(student_ids))).all()
+    by_user: dict[int, list[ExamAttempt]] = {}
+    for a in attempts:
+        by_user.setdefault(a.user_id, []).append(a)
+
+    rows: list[ExamResultRow] = []
+    for student_id in sorted(student_ids):
+        user = users.get(student_id)
+        if not user:
+            continue
+        user_attempts = by_user.get(student_id, [])
+        terminal = [a for a in user_attempts if a.status in (AttemptStatus.submitted, AttemptStatus.expired)]
+        is_locked = any(a.status == AttemptStatus.locked for a in user_attempts)
+        attempts_used = len(terminal)
+        best = max((a.percentage for a in terminal), default=None)
+        latest = max(terminal, key=lambda a: a.submitted_at or utcnow(), default=None)
+
+        if is_locked:
+            row_status = "locked"
+        elif attempts_used == 0:
+            row_status = "not_taken"
+        else:
+            row_status = "submitted"
+        if status_filter and status_filter != "all" and status_filter != row_status:
+            continue
+
+        rows.append(ExamResultRow(
+            student_id=student_id, full_name=user.full_name, student_code=user.student_code, status=row_status,
+            best=best, attempts_used=attempts_used,
+            latest=ExamResultLatestOut(percentage=latest.percentage, score_points=latest.score_points, total_points=latest.total_points, passed=latest.passed, submitted_at=latest.submitted_at) if latest else None,
+        ))
+    return rows
+
+
+def export_exam_results_xlsx(exam: Exam, rows: list[ExamResultRow]) -> bytes:
+    from openpyxl import Workbook
+
+    labels = {"submitted": "تم التسليم", "not_taken": "لم يبدأ", "locked": "مقفلة"}
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Results"
+    ws.append(["Student ID", "Full Name", "Status", "Best %", "Latest %", "Score", "Total", "Passed", "Attempts", "Submitted At"])
+    for row in rows:
+        ws.append([
+            row.student_code or "", row.full_name, labels.get(row.status, row.status), row.best if row.best is not None else "",
+            row.latest.percentage if row.latest else "", row.latest.score_points if row.latest else "", row.latest.total_points if row.latest else "",
+            ("نعم" if row.latest.passed else "لا") if row.latest else "", row.attempts_used,
+            row.latest.submitted_at.strftime("%Y-%m-%d %H:%M") if row.latest and row.latest.submitted_at else "",
+        ])
+    import io
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -62,8 +62,7 @@ def _to_row(user: User, profile: StudentProfile, groups_count: int, courses_coun
     )
 
 
-def list_students(
-    db: Session,
+def student_filter_stmt(
     academy_id: int,
     *,
     q: str | None,
@@ -72,11 +71,10 @@ def list_students(
     subscription: str | None,
     group_id: int | None,
     course_id: int | None,
-    active: bool | None,
-    sort: str | None,
-    page: int,
-    page_size: int,
-) -> Page[StudentRow]:
+    active: bool | None = None,
+):
+    """The (User, StudentProfile) filter shared by the admin student list and the admin reports
+    list (ARCHITECTURE.md §5.3) -- kept in one place so the two never drift on what a filter means."""
     stmt = (
         select(User, StudentProfile)
         .join(StudentProfile, StudentProfile.user_id == User.id)
@@ -111,6 +109,25 @@ def list_students(
             .where(GroupCourseEnrollment.course_id == course_id)
         )
         stmt = stmt.where(or_(User.id.in_(direct_ids), User.id.in_(group_ids)))
+    return stmt
+
+
+def list_students(
+    db: Session,
+    academy_id: int,
+    *,
+    q: str | None,
+    grade: str | None,
+    student_type: str | None,
+    subscription: str | None,
+    group_id: int | None,
+    course_id: int | None,
+    active: bool | None,
+    sort: str | None,
+    page: int,
+    page_size: int,
+) -> Page[StudentRow]:
+    stmt = student_filter_stmt(academy_id, q=q, grade=grade, student_type=student_type, subscription=subscription, group_id=group_id, course_id=course_id, active=active)
 
     total = db.scalar(select(func.count()).select_from(stmt.with_only_columns(User.id).subquery())) or 0
 

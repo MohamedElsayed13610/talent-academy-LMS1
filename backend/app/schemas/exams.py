@@ -189,6 +189,29 @@ class AnswerKeyApplyIn(BaseModel):
     publish: bool = True
 
 
+# ----------------------------------------------------------------------------------- results ----
+
+ExamResultStatusL = Literal["submitted", "not_taken", "locked"]
+
+
+class ExamResultLatestOut(BaseModel):
+    percentage: int
+    score_points: int
+    total_points: int
+    passed: bool
+    submitted_at: datetime | None
+
+
+class ExamResultRow(BaseModel):
+    student_id: int
+    full_name: str
+    student_code: str | None
+    status: ExamResultStatusL
+    best: int | None
+    latest: ExamResultLatestOut | None
+    attempts_used: int
+
+
 # -------------------------------------------------------------------------------- passages ----
 
 class PassageIn(BaseModel):
