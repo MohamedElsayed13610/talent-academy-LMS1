@@ -13,6 +13,10 @@ from app.jobs import scheduler as jobs_scheduler
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Fails fast on an unsafe production config (Scope D #11) rather than serving traffic first —
+    # see Settings.validate_for_production for exactly what's checked.
+    if settings.is_production:
+        settings.validate_for_production()
     # Scheduled jobs (ARCHITECTURE.md §8) — file_cleanup for now, more in later phases. Guarded by
     # a Postgres advisory lock per job, so this is safe even if Railway ever runs >1 instance.
     jobs_scheduler.start()

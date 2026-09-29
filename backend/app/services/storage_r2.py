@@ -47,17 +47,34 @@ def sniff_content_type(content: bytes) -> str | None:
     return None
 
 
-def _client(endpoint_url: str | None = None):
+def _client(endpoint_url: str | None = None, access_key_id: str | None = None, secret_access_key: str | None = None, region: str | None = None):
     return boto3.client(
         "s3",
         endpoint_url=endpoint_url or settings.r2_endpoint_url,
-        aws_access_key_id=settings.r2_access_key_id,
-        aws_secret_access_key=settings.r2_secret_access_key,
-        region_name=settings.r2_region,
+        aws_access_key_id=access_key_id or settings.r2_access_key_id,
+        aws_secret_access_key=secret_access_key or settings.r2_secret_access_key,
+        region_name=region or settings.r2_region,
         # Path-style URLs work with both Cloudflare R2 and local MinIO and avoid generating a
         # browser-unresolvable host such as talent-files.localhost in development.
         config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
+
+
+def backup_client():
+    """A client for the backup destination -- genuinely separate credentials/endpoint from the
+    live files bucket in production (Scope E #4; enforced by Settings.validate_for_production).
+    Falls back to the live-files endpoint only when no BACKUP_R2_* is configured, which is the
+    normal case in local dev/test (one bundled MinIO for everything)."""
+    return _client(
+        endpoint_url=settings.backup_r2_endpoint_url or settings.r2_endpoint_url,
+        access_key_id=settings.backup_r2_access_key_id or settings.r2_access_key_id,
+        secret_access_key=settings.backup_r2_secret_access_key or settings.r2_secret_access_key,
+        region=settings.backup_r2_region or settings.r2_region,
+    )
+
+
+def backup_bucket() -> str:
+    return settings.backup_r2_bucket or settings.r2_bucket_backups
 
 
 def validate_upload(purpose: str, content: bytes) -> str:
@@ -73,24 +90,34 @@ def validate_upload(purpose: str, content: bytes) -> str:
     return sniffed
 
 
-def upload_bytes(bucket: str, key: str, content: bytes, content_type: str) -> None:
-    _client().put_object(Bucket=bucket, Key=key, Body=content, ContentType=content_type)
+def upload_bytes(bucket: str, key: str, content: bytes, content_type: str, *, client=None) -> None:
+    (client or _client()).put_object(Bucket=bucket, Key=key, Body=content, ContentType=content_type)
 
 
-def get_object_bytes(bucket: str, key: str) -> bytes | None:
+def get_object_bytes(bucket: str, key: str, *, client=None) -> bytes | None:
     try:
-        return _client().get_object(Bucket=bucket, Key=key)["Body"].read()
+        return (client or _client()).get_object(Bucket=bucket, Key=key)["Body"].read()
     except ClientError:
         return None
 
 
-def delete_object(bucket: str, key: str) -> bool:
+def delete_object(bucket: str, key: str, *, client=None) -> bool:
     """Returns True on success (including "already gone") so the cleanup job can retire the row."""
     try:
-        _client().delete_object(Bucket=bucket, Key=key)
+        (client or _client()).delete_object(Bucket=bucket, Key=key)
         return True
     except ClientError:
         return False
+
+
+def list_objects(bucket: str, prefix: str, *, client=None) -> list[dict]:
+    c = client or _client()
+    paginator = c.get_paginator("list_objects_v2")
+    out: list[dict] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            out.append({"key": obj["Key"], "size": obj["Size"]})
+    return out
 
 
 def presigned_get_url(bucket: str, key: str, expires_in: int = 300) -> str:

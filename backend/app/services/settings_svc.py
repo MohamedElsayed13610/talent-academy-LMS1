@@ -13,7 +13,7 @@ from app.core.errors import ConflictError, ForbiddenError, NotFoundError, Valida
 from app.core.security import hash_password
 from app.core.time import utcnow
 from app.models.academy import DEFAULT_POINT_VALUES, AcademySettings
-from app.models.audit import AuditLog, JobRun
+from app.models.audit import AuditLog
 from app.models.identity import AdminProfile, User, UserRole
 from app.services import files as files_svc
 from app.services.audit import record_audit
@@ -26,7 +26,6 @@ from app.schemas.settings import (
     AdminAccountOut,
     AdminAccountUpdate,
     AuditLogRow,
-    BackupStatusOut,
 )
 
 
@@ -212,14 +211,7 @@ def list_audit_log(db: Session, academy_id: int, *, action: str | None, entity_t
     ]
     return Page[AuditLogRow](items=items, total=total, page=page, page_size=page_size)
 
-
-# ------------------------------------------------------------------------------------- backup ----
-
-def backup_status(db: Session) -> BackupStatusOut:
-    from app.core.config import settings as app_settings
-
-    configured = bool(app_settings.r2_endpoint_url and app_settings.r2_access_key_id)
-    last_run = db.scalar(select(JobRun).where(JobRun.job_name == "backup").order_by(JobRun.started_at.desc()).limit(1))
-    if not last_run:
-        return BackupStatusOut(configured=configured, last_run_at=None, last_status=None, last_detail=None)
-    return BackupStatusOut(configured=configured, last_run_at=last_run.finished_at or last_run.started_at, last_status=last_run.status, last_detail=last_run.detail)
+# Backup status/controls are deliberately NOT exposed anywhere in this module's callers (Scope E:
+# "the academy admin must not see backup controls or backup status ... technical-operator
+# functionality only"). Checking on a backup is an infra-level task -- see app/jobs/backup.py's
+# module docstring and docs/DEPLOYMENT.md's restore section, not an admin API endpoint.

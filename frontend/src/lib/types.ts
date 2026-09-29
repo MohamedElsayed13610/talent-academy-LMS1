@@ -1114,12 +1114,8 @@ export interface AuditLogRow {
   created_at: string;
 }
 
-export interface BackupStatusOut {
-  configured: boolean;
-  last_run_at: string | null;
-  last_status: string | null;
-  last_detail: string | null;
-}
+// No BackupStatusOut here on purpose (Scope E): backup status is technical-operator
+// infrastructure, never surfaced in the app UI.
 
 export interface PeriodOut {
   date_from: string | null;

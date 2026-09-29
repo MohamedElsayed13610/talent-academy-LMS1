@@ -10,6 +10,24 @@ from __future__ import annotations
 from botocore.exceptions import ClientError
 
 
+class _FakeBody:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class _FakePaginator:
+    def __init__(self, client: "FakeS3Client") -> None:
+        self._client = client
+
+    def paginate(self, Bucket, Prefix=""):  # noqa: N803
+        keys = sorted(k for (b, k) in self._client.objects if b == Bucket and k.startswith(Prefix))
+        contents = [{"Key": k, "Size": len(self._client.objects[(Bucket, k)])} for k in keys]
+        yield {"Contents": contents}
+
+
 class FakeS3Client:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], bytes] = {}
@@ -18,6 +36,12 @@ class FakeS3Client:
     def put_object(self, Bucket, Key, Body, ContentType=None):  # noqa: N803 (matches boto3's signature)
         self.buckets.add(Bucket)
         self.objects[(Bucket, Key)] = Body
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        try:
+            return {"Body": _FakeBody(self.objects[(Bucket, Key)])}
+        except KeyError:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "Not Found"}}, "GetObject")
 
     def delete_object(self, Bucket, Key):  # noqa: N803
         self.objects.pop((Bucket, Key), None)
@@ -28,6 +52,9 @@ class FakeS3Client:
 
     def create_bucket(self, Bucket):  # noqa: N803
         self.buckets.add(Bucket)
+
+    def get_paginator(self, operation_name):
+        return _FakePaginator(self)
 
     def generate_presigned_url(self, operation, Params, ExpiresIn=300):  # noqa: N803
         bucket, key = Params["Bucket"], Params["Key"]

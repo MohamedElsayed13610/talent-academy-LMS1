@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import STATE_STOPPED
@@ -29,7 +29,22 @@ LOCK_KEYS: dict[str, int] = {
     "session_prune": 1005,
 }
 
+# Africa/Cairo has used a fixed UTC+2 offset year-round (no DST) since 2016, so "03:00 Cairo" is
+# simply "01:00 UTC" with no seasonal correction ever needed.
+_CAIRO_UTC_OFFSET_HOURS = 2
+_BACKUP_HOUR_UTC = 3 - _CAIRO_UTC_OFFSET_HOURS
+
 _scheduler: BackgroundScheduler | None = None
+
+
+def _next_backup_run(now: datetime) -> datetime:
+    """The next 01:00 UTC (03:00 Africa/Cairo) at or after `now` -- the anchor for the every-3-days
+    interval below, so the job always lands on that same wall-clock time regardless of when the
+    process happens to start."""
+    candidate = now.replace(hour=_BACKUP_HOUR_UTC, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
 
 
 def _get_scheduler() -> BackgroundScheduler:
@@ -81,9 +96,13 @@ def start() -> None:
         # Every 30s per ARCHITECTURE.md §8 -- expired in-progress attempts must resolve promptly
         # even if the student never comes back to the tab.
         scheduler.add_job(lambda: run_locked("auto_submit", run_auto_submit), "interval", seconds=30, id="auto_submit", next_run_time=datetime.now(timezone.utc), misfire_grace_time=None)
-        # Once a day is enough for a small-academy Postgres dump; no next_run_time override, so the
-        # first run lands a day after each process start rather than dumping on every restart.
-        scheduler.add_job(lambda: run_locked("backup", run_backup), "interval", hours=24, id="backup", misfire_grace_time=None)
+        # Every 3 days at 03:00 Africa/Cairo (01:00 UTC) -- Scope E. start_date anchors the first
+        # run to that wall-clock time (not "3 days after process start"), and every run after it
+        # lands on the same hour since the interval is a whole number of days.
+        scheduler.add_job(
+            lambda: run_locked("backup", run_backup), "interval", days=3,
+            start_date=_next_backup_run(datetime.now(timezone.utc)), id="backup", misfire_grace_time=3600,
+        )
         scheduler.start()
 
 

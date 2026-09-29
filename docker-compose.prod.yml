@@ -1,0 +1,120 @@
+name: talent-academy-lms
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - talent_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    # No `ports:` — only reachable from other containers on this compose network, never the host.
+
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_DEFAULT_BUCKETS: ${R2_BUCKET_FILES}
+    volumes:
+      - talent_minio_data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging: *default-logging
+    # No `ports:` either. This is the *live files* store only (Scope D §6) — never publish 9000/9001
+    # on the host. If you need the MinIO console, use an SSH tunnel:
+    #   ssh -L 9001:localhost:9001 user@your-vps   then open http://localhost:9001 locally.
+    # This is NOT the backup destination — Scope E requires backups go to a genuinely separate,
+    # off-VPS bucket (BACKUP_R2_* in .env.production), not this container.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env.production
+    environment:
+      ENVIRONMENT: production
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+    # No `ports:` — only Caddy reaches it, over the compose network (Scope D §6).
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: /api/v1
+      BACKEND_INTERNAL_URL: http://backend:8000
+      # Next's standalone server.js binds to HOSTNAME (default: the container's own assigned IP,
+      # not loopback) — without this, `wget http://localhost:3000/` from inside the same
+      # container (the healthcheck below, and any other loopback check) gets connection refused
+      # even though the server is genuinely up and Caddy can reach it fine via the container's
+      # real IP over the compose network's DNS.
+      HOSTNAME: "0.0.0.0"
+    healthcheck:
+      # 127.0.0.1, not localhost: musl/wget resolves "localhost" to ::1 first, and the Next
+      # standalone server (HOSTNAME=0.0.0.0 above) only binds the IPv4 side, so the hostname form
+      # intermittently gets a false-negative "connection refused" against the (unbound) IPv6 loopback.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+    # No `ports:` — Caddy is the only public entrypoint.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    logging: *default-logging
+
+volumes:
+  talent_pg_data:
+  talent_minio_data:
+  caddy_data:
+  caddy_config:

@@ -10,7 +10,6 @@ import type {
   AdminAccountUpdate,
   AdminResetPasswordRequest,
   AuditLogRow,
-  BackupStatusOut,
   Page,
 } from "@/lib/types";
 
@@ -29,13 +28,6 @@ export function useUpdateAcademySettings() {
       queryClient.setQueryData(["admin", "settings"], data);
       queryClient.invalidateQueries({ queryKey: ["public", "branding"] });
     },
-  });
-}
-
-export function useBackupStatus() {
-  return useQuery<BackupStatusOut>({
-    queryKey: ["admin", "settings", "backup"],
-    queryFn: () => api.get<BackupStatusOut>("/admin/settings/backup"),
   });
 }
 

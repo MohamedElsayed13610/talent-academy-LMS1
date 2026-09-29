@@ -1,16 +1,14 @@
-"""Phase 9: GET/PUT /admin/settings, admin account CRUD, /admin/audit-log, /admin/settings/backup.
+"""Phase 9: GET/PUT /admin/settings, admin account CRUD, /admin/audit-log.
 Phase 10 (Scope A): explicit admin passwords, primary-admin-only account management, change-my-
-password auditing.
+password auditing. (Scope E moved backup status out of this admin-facing API entirely.)
 """
 
 from fastapi.testclient import TestClient
 
 from app.core.search import normalize_search_text
 from app.core.security import hash_password
-from app.core.time import utcnow
 from app.db.scope import get_default_academy_id
 from app.main import app as fastapi_app
-from app.models.audit import JobRun
 from app.models.identity import AdminProfile, StudentProfile, StudentType, SubscriptionStatus, User, UserRole
 
 
@@ -233,14 +231,7 @@ def test_admin_delete_blocked_when_last_active_admin(admin_client, admin_user, d
     assert response.status_code == 204
 
 
-def test_backup_status_reports_never_run_then_last_run(admin_client, db_session):
-    never_run = admin_client.get("/api/v1/admin/settings/backup")
-    assert never_run.status_code == 200
-    assert never_run.json()["last_run_at"] is None
-
-    db_session.add(JobRun(job_name="backup", started_at=utcnow(), finished_at=utcnow(), status="ok", detail="uploaded db/backup.sql.gz (123 bytes)"))
-    db_session.commit()
-
-    after = admin_client.get("/api/v1/admin/settings/backup")
-    assert after.status_code == 200
-    assert after.json()["last_status"] == "ok"
+def test_backup_status_not_exposed_to_admin_api(admin_client):
+    """Scope E: backup is technical-operator-only -- no admin-authenticated endpoint exposes it."""
+    response = admin_client.get("/api/v1/admin/settings/backup")
+    assert response.status_code == 404

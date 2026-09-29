@@ -1,0 +1,48 @@
+{
+	email {$ACME_EMAIL}
+
+	servers {
+		timeouts {
+			read_body   60s
+			read_header 10s
+			write       60s
+			idle        120s
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode gzip zstd
+
+	# Generous enough for a lesson PDF (app-level cap: 20MB) or an exam question image batch,
+	# plus headroom — the app's own per-file limits (storage_r2.py ALLOWED_BY_PURPOSE) are the
+	# real enforcement; this is just the outer ceiling so a legitimate upload never gets cut off
+	# by the proxy first.
+	request_body {
+		max_size 25MB
+	}
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	header {
+		# Defense in depth — the backend already sets its own security headers (app/main.py) for
+		# API responses; this covers everything Caddy serves directly (the frontend's pages/assets).
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+	}
+}

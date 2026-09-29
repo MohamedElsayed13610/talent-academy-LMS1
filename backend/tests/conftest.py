@@ -167,5 +167,5 @@ def fake_s3(monkeypatch):
     from tests.fake_s3 import FakeS3Client
 
     instance = FakeS3Client()
-    monkeypatch.setattr(storage_r2, "_client", lambda endpoint_url=None: instance)
+    monkeypatch.setattr(storage_r2, "_client", lambda *a, **kw: instance)
     return instance

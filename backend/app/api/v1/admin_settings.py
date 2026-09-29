@@ -15,7 +15,6 @@ from app.schemas.settings import (
     AdminAccountUpdate,
     AdminResetPasswordRequest,
     AuditLogRow,
-    BackupStatusOut,
 )
 from app.services import settings_svc as svc
 
@@ -33,11 +32,6 @@ def update_settings(
     admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db),
 ):
     return svc.update_settings(db, academy_id, payload, admin, request)
-
-
-@router.get("/settings/backup", response_model=BackupStatusOut)
-def backup_status(_: User = Depends(require_admin), db: Session = Depends(get_db)):
-    return svc.backup_status(db)
 
 
 @router.get("/admins", response_model=list[AdminAccountOut])

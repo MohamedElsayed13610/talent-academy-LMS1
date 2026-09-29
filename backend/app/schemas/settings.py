@@ -77,8 +77,5 @@ class AuditLogRow(BaseModel):
     created_at: datetime
 
 
-class BackupStatusOut(BaseModel):
-    configured: bool
-    last_run_at: datetime | None
-    last_status: str | None
-    last_detail: str | None
+# No BackupStatusOut / backup API here on purpose (Scope E): backup status is technical-operator
+# infrastructure, never surfaced to the academy admin through the app.
