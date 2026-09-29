@@ -4,7 +4,9 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_academy_id, require_admin
+from app.core.errors import NotFoundError
 from app.db.session import get_db
+from app.models.exams import ExamPassage
 from app.models.identity import User
 from app.schemas.common import Page
 from app.schemas.exams import (
@@ -17,6 +19,9 @@ from app.schemas.exams import (
     ExamIn,
     ExamPatch,
     OrderIn,
+    PassageIn,
+    PassagePatch,
+    PassageQuestionsIn,
     QuestionImageMeta,
     QuestionPatch,
     TextQuestionIn,
@@ -25,6 +30,7 @@ from app.services import exams as svc
 
 router = APIRouter(prefix="/admin/exams", tags=["admin:exams"])
 questions_router = APIRouter(prefix="/admin/questions", tags=["admin:exams"])
+passages_router = APIRouter(prefix="/admin/passages", tags=["admin:exams"])
 
 
 @router.get("", response_model=Page[AdminExamRow])
@@ -129,3 +135,50 @@ def update_question(question_id: int, payload: QuestionPatch, request: Request, 
 def delete_question(question_id: int, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
     question, exam = _exam_for_question(db, academy_id, question_id)
     return svc.delete_question(db, academy_id, exam, question, admin, request)
+
+
+# ------------------------------------------------------------------------------- passages ----
+
+@router.post("/{exam_id}/passages", response_model=AdminExamDetail, status_code=201)
+def create_passage(exam_id: int, payload: PassageIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    exam = svc.get_exam_or_404(db, academy_id, exam_id)
+    return svc.create_passage(db, academy_id, exam, payload, admin, request)
+
+
+@router.put("/{exam_id}/passages/order", response_model=AdminExamDetail)
+def reorder_passages(exam_id: int, payload: OrderIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    exam = svc.get_exam_or_404(db, academy_id, exam_id)
+    return svc.reorder_passages(db, academy_id, exam, payload.ids, admin, request)
+
+
+def _exam_for_passage(db: Session, academy_id: int, passage_id: int):
+    passage = db.get(ExamPassage, passage_id)
+    if not passage:
+        raise NotFoundError(code="PASSAGE_NOT_FOUND", message="المقطع غير موجود")
+    exam = svc.get_exam_or_404(db, academy_id, passage.exam_id)
+    return passage, exam
+
+
+@passages_router.patch("/{passage_id}", response_model=AdminExamDetail)
+def update_passage(passage_id: int, payload: PassagePatch, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    passage, exam = _exam_for_passage(db, academy_id, passage_id)
+    return svc.update_passage(db, academy_id, exam, passage, payload, admin, request)
+
+
+@passages_router.delete("/{passage_id}", response_model=AdminExamDetail)
+def delete_passage(passage_id: int, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    passage, exam = _exam_for_passage(db, academy_id, passage_id)
+    return svc.delete_passage(db, academy_id, exam, passage, admin, request)
+
+
+@passages_router.put("/{passage_id}/questions", response_model=AdminExamDetail)
+def set_passage_questions(passage_id: int, payload: PassageQuestionsIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    passage, exam = _exam_for_passage(db, academy_id, passage_id)
+    return svc.set_passage_questions(db, academy_id, exam, passage, payload.question_ids, admin, request)
+
+
+@passages_router.post("/{passage_id}/image", response_model=AdminExamDetail, status_code=201)
+async def upload_passage_image(passage_id: int, request: Request, file: UploadFile = File(...), admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    passage, exam = _exam_for_passage(db, academy_id, passage_id)
+    content = await file.read()
+    return svc.upload_passage_image(db, academy_id, exam, passage, file.filename or "", content, admin, request)

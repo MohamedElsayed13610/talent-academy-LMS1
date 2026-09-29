@@ -31,6 +31,7 @@ ALLOWED_BY_PURPOSE: dict[str, tuple[set[str], int]] = {
     "course_cover": ({"image/png", "image/jpeg", "image/webp"}, 2 * 1024 * 1024),
     "logo": ({"image/png", "image/jpeg", "image/webp"}, 2 * 1024 * 1024),
     "question_image": ({"image/png", "image/jpeg", "image/webp"}, 800_000),
+    "passage_image": ({"image/png", "image/jpeg", "image/webp"}, 2 * 1024 * 1024),
 }
 
 

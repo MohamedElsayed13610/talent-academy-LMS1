@@ -13,6 +13,7 @@ from app.db.base import Base
 
 class FilePurpose(str, Enum):
     question_image = "question_image"
+    passage_image = "passage_image"
     material_pdf = "material_pdf"
     course_cover = "course_cover"
     logo = "logo"

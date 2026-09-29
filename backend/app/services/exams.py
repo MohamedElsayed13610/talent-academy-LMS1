@@ -26,6 +26,7 @@ from app.models.exams import (
     ExamAttempt,
     ExamChoice,
     ExamMode,
+    ExamPassage,
     ExamQuestion,
     QuestionType,
 )
@@ -47,7 +48,10 @@ from app.schemas.exams import (
     ExamDeletePreview,
     ExamIn,
     ExamPatch,
+    ExamPassageOut,
     ExamQuestionOut,
+    PassageIn,
+    PassagePatch,
     QuestionImageMeta,
     QuestionPatch,
     TextQuestionIn,
@@ -181,25 +185,42 @@ def exam_detail(db: Session, exam: Exam) -> AdminExamDetail:
     # Phase 3 -- multiple mutations return the tree within one request/session.
     exam = db.scalar(
         select(Exam).where(Exam.id == exam.id)
-        .options(selectinload(Exam.questions).selectinload(ExamQuestion.choices), selectinload(Exam.questions).selectinload(ExamQuestion.image_file))
+        .options(
+            selectinload(Exam.questions).selectinload(ExamQuestion.choices),
+            selectinload(Exam.questions).selectinload(ExamQuestion.image_file),
+            selectinload(Exam.passages).selectinload(ExamPassage.questions),
+            selectinload(Exam.passages).selectinload(ExamPassage.image_file),
+        )
         .execution_options(populate_existing=True)
     )
     course = db.get(Course, exam.course_id)
     group = db.get(StudentGroup, exam.group_id) if exam.group_id else None
     questions = sorted(exam.questions, key=lambda q: q.position)
+    passages = sorted(exam.passages, key=lambda p: p.position)
+
+    from app.services import files as files_svc
 
     question_out = []
     for q in questions:
         image_url = None
         if q.image_file_id:
-            from app.services import files as files_svc
-
             result = files_svc.signed_url(db, q.image_file_id, expires_in=3600)
             image_url = result[0] if result else None
         question_out.append(ExamQuestionOut(
             id=q.id, question_type=q.question_type.value, position=q.position, prompt_text=q.prompt_text,
-            image_url=image_url, topic=q.topic, difficulty=q.difficulty.value, points=q.points,
+            image_url=image_url, topic=q.topic, difficulty=q.difficulty.value, points=q.points, passage_id=q.passage_id,
             choices=[ExamChoiceOut(id=c.id, label=c.label.value, text=c.text, is_correct=c.is_correct) for c in sorted(q.choices, key=lambda c: c.label.value)],
+        ))
+
+    passage_out = []
+    for p in passages:
+        image_url = None
+        if p.image_file_id:
+            result = files_svc.signed_url(db, p.image_file_id, expires_in=3600)
+            image_url = result[0] if result else None
+        passage_out.append(ExamPassageOut(
+            id=p.id, title=p.title, body_text=p.body_text, image_url=image_url, position=p.position,
+            question_ids=sorted(pq.id for pq in p.questions),
         ))
 
     return AdminExamDetail(
@@ -209,6 +230,7 @@ def exam_detail(db: Session, exam: Exam) -> AdminExamDetail:
         max_attempts=exam.max_attempts, starts_at=exam.starts_at, ends_at=exam.ends_at, is_published=exam.is_published,
         published_at=exam.published_at, state=_state_of(exam), has_attempts=_has_attempts(db, exam.id),
         question_count=len(questions), total_points=sum(q.points for q in questions), questions=question_out,
+        passages=passage_out,
     )
 
 
@@ -269,21 +291,28 @@ def delete_preview(db: Session, exam: Exam) -> ExamDeletePreview:
     question_count = db.scalar(select(func.count()).where(ExamQuestion.exam_id == exam.id).select_from(ExamQuestion)) or 0
     attempt_ids = db.scalars(select(ExamAttempt.id).where(ExamAttempt.exam_id == exam.id)).all()
     answers_count = db.scalar(select(func.count()).where(ExamAnswer.attempt_id.in_(attempt_ids)).select_from(ExamAnswer)) if attempt_ids else 0
-    points_count = db.scalar(select(func.count()).where(PointLedger.source_type == PointSource.exam, PointLedger.source_id.in_(attempt_ids)).select_from(PointLedger)) if attempt_ids else 0
+    # source_id is the exam's own id (one ledger row per student-exam pair), not per attempt --
+    # see the note in delete_exam().
+    points_count = db.scalar(select(func.count()).where(PointLedger.source_type == PointSource.exam, PointLedger.source_id == exam.id).select_from(PointLedger)) or 0
     return ExamDeletePreview(questions=question_count, attempts=len(attempt_ids), answers=answers_count or 0, points_entries=points_count or 0)
 
 
 def delete_exam(db: Session, academy_id: int, exam: Exam, actor: User, request: Request | None) -> None:
     preview = delete_preview(db, exam)
-    # Points earned from this exam's attempts are removed with it (Q7/A23 -- unlike lesson/attendance
-    # points, exam points do not survive deletion of their source). Routed through award() so
+    # Points earned from this exam are removed with it (Q7/A23 -- unlike lesson/attendance points,
+    # exam points do not survive deletion of their source). Routed through award() so
     # student_profiles.total_points stays in sync, not just a raw DELETE.
-    attempt_ids = db.scalars(select(ExamAttempt.id).where(ExamAttempt.exam_id == exam.id)).all()
-    if attempt_ids:
-        ledger_rows = db.scalars(select(PointLedger).where(PointLedger.source_type == PointSource.exam, PointLedger.source_id.in_(attempt_ids))).all()
-        for row in ledger_rows:
-            points_svc.award(db, user_id=row.user_id, event_key=row.event_key, source_type=row.source_type, source_id=row.source_id, points=0, description="", course_id=row.course_id)
-            db.delete(row)
+    #
+    # Phase 6 correction (ARCHITECTURE.md §4.2, written after this function): the ledger event_key
+    # is "exam:{exam_id}" with source_id=exam.id -- one row per (student, exam), holding the best
+    # percentage across that student's attempts -- not one row per attempt. This function
+    # originally queried source_id.in_(attempt_ids), which never matched anything (a harmless no-op
+    # until Phase 6 actually started writing exam-sourced ledger rows, since no attempt flow
+    # existed yet to create any).
+    ledger_rows = db.scalars(select(PointLedger).where(PointLedger.source_type == PointSource.exam, PointLedger.source_id == exam.id)).all()
+    for row in ledger_rows:
+        points_svc.award(db, user_id=row.user_id, event_key=row.event_key, source_type=row.source_type, source_id=row.source_id, points=0, description="", course_id=row.course_id)
+        db.delete(row)
 
     record_audit(db, academy_id=academy_id, actor=actor, action="exam.delete", entity_type="exam", entity_id=str(exam.id), summary={"title": exam.title, **preview.model_dump()}, request=request)
     # Cascades questions/choices (and their image_file_id delete-queue triggers from Phase 1),
@@ -402,6 +431,12 @@ def update_question(db: Session, academy_id: int, exam: Exam, question: ExamQues
     if "correct_label" in data and data["correct_label"] is not None:
         for c in question.choices:
             c.is_correct = c.label.value == data["correct_label"]
+    if "passage_id" in data:
+        if data["passage_id"] is not None:
+            passage = db.get(ExamPassage, data["passage_id"])
+            if not passage or passage.exam_id != exam.id:
+                raise NotFoundError(code="PASSAGE_NOT_FOUND", message="المقطع غير موجود في هذا الامتحان")
+        question.passage_id = data["passage_id"]
 
     record_audit(db, academy_id=academy_id, actor=actor, action="exam.question.update", entity_type="exam_question", entity_id=str(question.id), summary=data, request=request)
     db.commit()
@@ -485,5 +520,89 @@ def apply_answer_key(db: Session, academy_id: int, exam: Exam, answers_text: str
         exam.published_at = utcnow()
 
     record_audit(db, academy_id=academy_id, actor=actor, action="exam.answer_key.apply", entity_type="exam", entity_id=str(exam.id), summary={"count": len(letters), "published": publish}, request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+# ------------------------------------------------------------------------------- passages ----
+
+def get_passage_or_404(db: Session, academy_id: int, exam: Exam, passage_id: int) -> ExamPassage:
+    passage = db.scalar(select(ExamPassage).where(ExamPassage.id == passage_id, ExamPassage.exam_id == exam.id))
+    if not passage:
+        raise NotFoundError(code="PASSAGE_NOT_FOUND", message="المقطع غير موجود")
+    return passage
+
+
+def create_passage(db: Session, academy_id: int, exam: Exam, payload: PassageIn, actor: User, request: Request | None) -> AdminExamDetail:
+    next_position = (db.scalar(select(func.max(ExamPassage.position)).where(ExamPassage.exam_id == exam.id)) or 0) + 1
+    passage = ExamPassage(exam_id=exam.id, title=payload.title.strip(), body_text=payload.body_text.strip(), position=next_position)
+    db.add(passage)
+    db.flush()
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.create", entity_type="exam", entity_id=str(exam.id), summary={"passage_id": passage.id}, request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+def update_passage(db: Session, academy_id: int, exam: Exam, passage: ExamPassage, payload: PassagePatch, actor: User, request: Request | None) -> AdminExamDetail:
+    data = payload.model_dump(exclude_unset=True)
+    if "title" in data and data["title"] is not None:
+        passage.title = data["title"].strip()
+    if "body_text" in data and data["body_text"] is not None:
+        passage.body_text = data["body_text"].strip()
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.update", entity_type="exam_passage", entity_id=str(passage.id), summary=data, request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+def upload_passage_image(db: Session, academy_id: int, exam: Exam, passage: ExamPassage, filename: str, content: bytes, actor: User, request: Request | None) -> AdminExamDetail:
+    content_type = storage_r2.validate_upload("passage_image", content)
+    ext = storage_r2.ext_for_content_type(content_type)
+    key = storage_r2.new_storage_key(academy_id, "passage_image", ext)
+    storage_r2.upload_bytes(settings.r2_bucket_files, key, content, content_type)
+    file_row = File(
+        academy_id=academy_id, bucket=settings.r2_bucket_files, storage_key=key, purpose=FilePurpose.passage_image,
+        content_type=content_type, size_bytes=len(content), original_name=(filename or "")[:255], uploaded_by=actor.id,
+    )
+    db.add(file_row)
+    db.flush()
+    # Replacing an existing image relies on the exam_passages.image_file_id UPDATE trigger (Phase 1
+    # migration) to queue the old file for storage cleanup.
+    passage.image_file_id = file_row.id
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.image", entity_type="exam_passage", entity_id=str(passage.id), request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+def delete_passage(db: Session, academy_id: int, exam: Exam, passage: ExamPassage, actor: User, request: Request | None) -> AdminExamDetail:
+    # ON DELETE SET NULL (exam_questions.passage_id) -- linked questions survive, just lose the link.
+    db.delete(passage)
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.delete", entity_type="exam", entity_id=str(exam.id), summary={"passage_id": passage.id}, request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+def reorder_passages(db: Session, academy_id: int, exam: Exam, ids: list[int], actor: User, request: Request | None) -> AdminExamDetail:
+    passages = {p.id: p for p in exam.passages}
+    if set(ids) != set(passages):
+        raise ConflictError(code="ORDER_MISMATCH", message="قائمة الترتيب لا تطابق مقاطع الامتحان الحالية")
+    for position, pid in enumerate(ids, start=1):
+        passages[pid].position = position
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.reorder", entity_type="exam", entity_id=str(exam.id), request=request)
+    db.commit()
+    return exam_detail(db, exam)
+
+
+def set_passage_questions(db: Session, academy_id: int, exam: Exam, passage: ExamPassage, question_ids: list[int], actor: User, request: Request | None) -> AdminExamDetail:
+    if question_ids:
+        found = db.scalars(select(ExamQuestion).where(ExamQuestion.id.in_(question_ids))).all()
+        if len(found) != len(set(question_ids)) or any(q.exam_id != exam.id for q in found):
+            raise ValidationAppError(code="QUESTION_NOT_IN_EXAM", message="لا يمكن ربط أسئلة من امتحان آخر بهذا المقطع")
+    # Unlink questions previously attached to this passage but not in the new set, then attach the new set.
+    db.execute(
+        ExamQuestion.__table__.update().where(ExamQuestion.passage_id == passage.id, ~ExamQuestion.id.in_(question_ids) if question_ids else True).values(passage_id=None)
+    )
+    if question_ids:
+        db.execute(ExamQuestion.__table__.update().where(ExamQuestion.id.in_(question_ids)).values(passage_id=passage.id))
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.set_questions", entity_type="exam_passage", entity_id=str(passage.id), summary={"question_ids": question_ids}, request=request)
     db.commit()
     return exam_detail(db, exam)

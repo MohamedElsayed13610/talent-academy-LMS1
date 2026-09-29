@@ -78,7 +78,17 @@ class ExamQuestionOut(BaseModel):
     topic: str
     difficulty: DifficultyL
     points: int
+    passage_id: int | None
     choices: list[ExamChoiceOut]
+
+
+class ExamPassageOut(BaseModel):
+    id: int
+    title: str
+    body_text: str
+    image_url: str | None
+    position: int
+    question_ids: list[int]
 
 
 class AdminExamDetail(BaseModel):
@@ -102,6 +112,7 @@ class AdminExamDetail(BaseModel):
     question_count: int
     total_points: int
     questions: list[ExamQuestionOut]
+    passages: list[ExamPassageOut]
 
 
 class ExamDeletePreview(BaseModel):
@@ -146,6 +157,7 @@ class QuestionPatch(BaseModel):
     points: int | None = Field(default=None, ge=0, le=100)
     choices: list[ChoiceIn] | None = Field(default=None, min_length=4, max_length=4)
     correct_label: ChoiceLabelL | None = None
+    passage_id: int | None = None
 
 
 class QuestionImageMeta(BaseModel):
@@ -175,3 +187,19 @@ class AnswerKeyApplyIn(BaseModel):
     answers: str = Field(min_length=1, max_length=20000)
     points_per_question: int | None = Field(default=None, ge=0, le=100)
     publish: bool = True
+
+
+# -------------------------------------------------------------------------------- passages ----
+
+class PassageIn(BaseModel):
+    title: str = Field(default="", max_length=180)
+    body_text: str = Field(default="", max_length=20000)
+
+
+class PassagePatch(BaseModel):
+    title: str | None = Field(default=None, max_length=180)
+    body_text: str | None = Field(default=None, max_length=20000)
+
+
+class PassageQuestionsIn(BaseModel):
+    question_ids: list[int] = Field(default_factory=list, max_length=200)

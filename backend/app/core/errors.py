@@ -55,6 +55,14 @@ class GoneError(AppError):
         super().__init__(status.HTTP_410_GONE, code, message, **kw)
 
 
+class LockedError(AppError):
+    """423 — a locked exam attempt (ARCHITECTURE.md §4.4: "Locked attempts cannot autosave or
+    submit")."""
+
+    def __init__(self, code: str = "ATTEMPT_LOCKED", message: str = "المحاولة مقفلة، تواصل مع الإدارة", **kw: Any) -> None:
+        super().__init__(status.HTTP_423_LOCKED, code, message, **kw)
+
+
 class RateLimitedError(AppError):
     def __init__(self, code: str = "RATE_LIMITED", message: str = "محاولات كثيرة جدًا، حاول لاحقًا", **kw: Any) -> None:
         super().__init__(status.HTTP_429_TOO_MANY_REQUESTS, code, message, **kw)

@@ -7,6 +7,7 @@ from app.models.exams import (
     ExamAttempt,
     ExamAttemptEvent,
     ExamChoice,
+    ExamPassage,
     ExamQuestion,
 )
 from app.models.files import File, PendingFileDeletion
@@ -40,6 +41,7 @@ __all__ = [
     "LiveSession",
     "AttendanceRecord",
     "Exam",
+    "ExamPassage",
     "ExamQuestion",
     "ExamChoice",
     "ExamAttempt",

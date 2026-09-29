@@ -79,6 +79,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX ix_attendance_user_session ON attendance_records (user_id, live_session_id)")
     op.execute("CREATE INDEX ix_attendance_session_status ON attendance_records (live_session_id, status)")
     op.execute("CREATE INDEX ix_exams_course_published ON exams (course_id, is_published)")
+    op.execute("CREATE INDEX ix_exam_passages_exam_position ON exam_passages (exam_id, position)")
     op.execute("CREATE INDEX ix_exam_attempts_user_exam ON exam_attempts (user_id, exam_id)")
     op.execute("CREATE INDEX ix_exam_attempts_exam_status ON exam_attempts (exam_id, status)")
     op.execute("CREATE INDEX ix_exam_attempts_status_expires ON exam_attempts (status, expires_at)")
@@ -128,6 +129,7 @@ def upgrade() -> None:
 
     _file_trigger("lesson_materials", "file_id")
     _file_trigger("exam_questions", "image_file_id")
+    _file_trigger("exam_passages", "image_file_id")
     _file_trigger("courses", "cover_file_id")
     _file_trigger("academy_settings", "logo_file_id")
 

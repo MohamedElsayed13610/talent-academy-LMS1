@@ -65,11 +65,21 @@ def run_locked(job_name: str, fn: Callable[[], str]) -> None:
 
 
 def start() -> None:
+    from app.jobs.auto_submit import run as run_auto_submit
     from app.jobs.file_cleanup import run as run_file_cleanup
 
     scheduler = _get_scheduler()
     if not scheduler.running:
-        scheduler.add_job(lambda: run_locked("file_cleanup", run_file_cleanup), "interval", minutes=5, id="file_cleanup", next_run_time=datetime.now(timezone.utc))
+        # misfire_grace_time=None: APScheduler's default (1 second) silently drops a scheduled run
+        # if the executor gets to it even slightly late -- easy to hit under normal jitter (a busy
+        # event loop, a slow DB round-trip, the dev reloader's file-watcher), and observed in
+        # practice to make auto_submit tick "missed" indefinitely instead of running. None means a
+        # late run still fires (coalesced with any other pending runs) rather than being skipped --
+        # correctness here matters more than exact timing.
+        scheduler.add_job(lambda: run_locked("file_cleanup", run_file_cleanup), "interval", minutes=5, id="file_cleanup", next_run_time=datetime.now(timezone.utc), misfire_grace_time=None)
+        # Every 30s per ARCHITECTURE.md §8 -- expired in-progress attempts must resolve promptly
+        # even if the student never comes back to the tab.
+        scheduler.add_job(lambda: run_locked("auto_submit", run_auto_submit), "interval", seconds=30, id="auto_submit", next_run_time=datetime.now(timezone.utc), misfire_grace_time=None)
         scheduler.start()
 
 

@@ -88,10 +88,32 @@ class Exam(Base, TimestampMixin):
 
     course = relationship("Course")
     group = relationship("StudentGroup")
+    passages: Mapped[list["ExamPassage"]] = relationship(
+        back_populates="exam", cascade="all, delete-orphan", order_by="ExamPassage.position"
+    )
     questions: Mapped[list["ExamQuestion"]] = relationship(
         back_populates="exam", cascade="all, delete-orphan", order_by="ExamQuestion.position"
     )
     attempts: Mapped[list["ExamAttempt"]] = relationship(back_populates="exam", cascade="all, delete-orphan")
+
+
+class ExamPassage(Base, TimestampMixin):
+    """A reading passage belonging to one exam; zero or more questions in that same exam may link
+    to it (ExamQuestion.passage_id). Deleting a passage does NOT delete its linked questions — the
+    FK uses ON DELETE SET NULL so those questions simply become passage-less."""
+
+    __tablename__ = "exam_passages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    exam_id: Mapped[int] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(180), default="")
+    body_text: Mapped[str] = mapped_column(Text, default="")
+    image_file_id: Mapped[str | None] = mapped_column(ForeignKey("files.id", ondelete="RESTRICT"), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+    exam: Mapped[Exam] = relationship(back_populates="passages")
+    questions: Mapped[list["ExamQuestion"]] = relationship(back_populates="passage", order_by="ExamQuestion.position")
+    image_file: Mapped["File | None"] = relationship(foreign_keys=[image_file_id])
 
 
 class ExamQuestion(Base):
@@ -100,6 +122,7 @@ class ExamQuestion(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     exam_id: Mapped[int] = mapped_column(ForeignKey("exams.id", ondelete="CASCADE"), index=True)
+    passage_id: Mapped[int | None] = mapped_column(ForeignKey("exam_passages.id", ondelete="SET NULL"), nullable=True, index=True)
     question_type: Mapped[QuestionType] = mapped_column(SQLEnum(QuestionType, name="question_type"))
     position: Mapped[int] = mapped_column(Integer, default=0)
     prompt_text: Mapped[str] = mapped_column(Text, default="")
@@ -109,6 +132,7 @@ class ExamQuestion(Base):
     points: Mapped[int] = mapped_column(Integer, default=1)
 
     exam: Mapped[Exam] = relationship(back_populates="questions")
+    passage: Mapped["ExamPassage | None"] = relationship(back_populates="questions")
     choices: Mapped[list["ExamChoice"]] = relationship(
         back_populates="question", cascade="all, delete-orphan", order_by="ExamChoice.label"
     )

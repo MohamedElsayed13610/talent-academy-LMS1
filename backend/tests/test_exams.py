@@ -477,7 +477,11 @@ def test_delete_exam_cascades_and_queues_image_cleanup(admin_client, db_session,
         data={"topic": "General", "difficulty": "medium", "points": "1"},
     )
     attempt = _seed_attempt(db_session, exam["id"])
-    db_session.add(PointLedger(user_id=attempt.user_id, event_key=f"exam:{attempt.id}", source_type=PointSource.exam, source_id=attempt.id, points=10, description="test", course_id=course.id))
+    # event_key/source_id convention confirmed by Phase 6 (ARCHITECTURE.md §4.2): one ledger row
+    # per (student, exam) holding the best percentage across attempts, keyed by exam id -- not one
+    # row per attempt. (This test used source_id=attempt.id before Phase 6 clarified this; see the
+    # note in services/exams.py's delete_exam().)
+    db_session.add(PointLedger(user_id=attempt.user_id, event_key=f"exam:{exam['id']}", source_type=PointSource.exam, source_id=exam["id"], points=10, description="test", course_id=course.id))
     db_session.commit()
     profile = db_session.get(StudentProfile, attempt.user_id)
     profile.total_points = 10
@@ -488,7 +492,7 @@ def test_delete_exam_cascades_and_queues_image_cleanup(admin_client, db_session,
 
     assert db_session.get(Exam, exam["id"]) is None
     assert db_session.query(ExamQuestion).filter(ExamQuestion.exam_id == exam["id"]).count() == 0
-    assert db_session.query(PointLedger).filter(PointLedger.source_type == PointSource.exam, PointLedger.source_id == attempt.id).count() == 0
+    assert db_session.query(PointLedger).filter(PointLedger.source_type == PointSource.exam, PointLedger.source_id == exam["id"]).count() == 0
     db_session.refresh(profile)
     assert profile.total_points == 0
     # The Phase-1 DB trigger on exam_questions.image_file_id queues the file for cleanup.
