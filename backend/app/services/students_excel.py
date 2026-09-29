@@ -19,6 +19,7 @@ from app.core.search import normalize_search_text
 from app.core.security import generate_password, hash_password
 from app.models.identity import GradeLevel, StudentProfile, StudentType, SubscriptionStatus, User, UserRole
 from app.services.audit import record_audit
+from app.services.excel_style import write_report_sheet
 from app.schemas.students import (
     CredentialsRow,
     ImportCommitOut,
@@ -184,29 +185,38 @@ def commit_import(db: Session, academy_id: int, rows: list[dict], actor: User, r
     return ImportCommitOut(created=created, failed=failed)
 
 
-def build_credentials_workbook(rows: list[CredentialsRow]) -> bytes:
+def build_credentials_workbook(rows: list[CredentialsRow], *, academy_name: str = "Talent Academy") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Credentials"
-    ws.append(["Student ID", "Full Name", "Password"])
-    for row in rows:
-        ws.append([row.student_code, row.full_name, row.password])
+    write_report_sheet(
+        ws, report_title="Newly Imported Student Credentials", headers=["Student ID", "Full Name", "Password"],
+        rows=[[row.student_code, row.full_name, row.password] for row in rows],
+        academy_name=academy_name, column_widths=[16, 28, 16],
+    )
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
 
 
-def build_students_export(rows: list[StudentRow]) -> bytes:
+def build_students_export(rows: list[StudentRow], *, academy_name: str = "Talent Academy") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Students"
-    ws.append(["Student ID", "Full Name", "Email", "Grade", "Type", "Subscription", "Active", "Groups", "Courses", "Points", "Last Login"])
-    for r in rows:
-        ws.append([
+    headers = ["Student ID", "Full Name", "Email", "Grade", "Type", "Subscription", "Active", "Groups", "Courses", "Points", "Last Login"]
+    data = [
+        [
             r.student_code or "", r.full_name, r.email or "", r.grade_level or "", r.student_type,
             r.effective_subscription, "Yes" if r.is_active else "No", r.groups_count, r.courses_count,
             r.total_points, r.last_login_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M") if r.last_login_at else "",
-        ])
+        ]
+        for r in rows
+    ]
+    totals = ["", f"Total: {len(rows)} students", "", "", "", "", "", "", "", sum(r.total_points for r in rows), ""] if rows else None
+    write_report_sheet(
+        ws, report_title="Students Export", headers=headers, rows=data, academy_name=academy_name, totals_row=totals,
+        column_widths=[14, 24, 26, 8, 10, 12, 8, 9, 9, 9, 16],
+    )
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

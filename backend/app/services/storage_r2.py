@@ -77,6 +77,13 @@ def upload_bytes(bucket: str, key: str, content: bytes, content_type: str) -> No
     _client().put_object(Bucket=bucket, Key=key, Body=content, ContentType=content_type)
 
 
+def get_object_bytes(bucket: str, key: str) -> bytes | None:
+    try:
+        return _client().get_object(Bucket=bucket, Key=key)["Body"].read()
+    except ClientError:
+        return None
+
+
 def delete_object(bucket: str, key: str) -> bool:
     """Returns True on success (including "already gone") so the cleanup job can retire the row."""
     try:

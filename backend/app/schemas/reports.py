@@ -71,3 +71,37 @@ class StudentReportDetail(BaseModel):
     last_login_at: datetime | None
     admin_notes: str
     whatsapp_summary_text: str
+
+
+class PeriodOut(BaseModel):
+    date_from: datetime | None
+    date_to: datetime | None
+
+
+class PeriodExamOut(BaseModel):
+    exam_title: str
+    percentage: int
+    passed: bool
+    submitted_at: datetime | None
+
+
+class PeriodLessonOut(BaseModel):
+    lesson_title: str
+    course_title: str
+    completed_at: datetime
+
+
+class StudentPeriodReport(BaseModel):
+    """Phase 9: the admin-selected-date-range student PDF report's data (ARCHITECTURE.md-style
+    period export) -- everything here is scoped to [date_from, date_to] except `courses`, which is
+    a cumulative progress snapshot (progress % isn't a period-bound concept)."""
+
+    student: StudentReportStudentOut
+    period: PeriodOut
+    courses: list[CourseProgressOut]
+    attendance: ReportAttendanceOut
+    exams: list[PeriodExamOut]
+    points_total: int
+    points_events: list[PointEvent]
+    completed_lessons: list[PeriodLessonOut]
+    admin_notes: str

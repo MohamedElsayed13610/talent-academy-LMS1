@@ -75,7 +75,9 @@ def finalize_attendance(session_id: int, request: Request, admin: User = Depends
 
 @router.get("/{session_id}/attendance.xlsx")
 def export_attendance(session_id: int, _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    from app.services.settings_svc import get_academy_display_name
+
     session = svc.get_session_or_404(db, academy_id, session_id)
     sheet = svc.attendance_sheet(db, academy_id, session)
-    content = svc.export_attendance_xlsx(sheet)
+    content = svc.export_attendance_xlsx(sheet, academy_name=get_academy_display_name(db, academy_id))
     return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=attendance-{session_id}.xlsx"})

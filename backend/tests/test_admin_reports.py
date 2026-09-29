@@ -119,6 +119,53 @@ def test_reports_xlsx_exports_smoke(admin_client, db_session):
     assert "spreadsheetml" in detail_xlsx.headers["content-type"]
 
 
+def test_student_period_report_filters_by_date_range(admin_client, db_session):
+    from datetime import timedelta
+
+    from app.core.time import utcnow
+
+    course = _make_course(db_session)
+    section = Section(course_id=course.id, title="Sec", position=1)
+    db_session.add(section)
+    db_session.flush()
+    lesson = Lesson(section_id=section.id, title="L1", duration_minutes=10, position=1)
+    db_session.add(lesson)
+    db_session.commit()
+
+    student = _make_student(db_session, "TA-082020")
+    db_session.add(Enrollment(user_id=student.id, course_id=course.id))
+    db_session.commit()
+    student_client = _login_student(student.student_code)
+    assert student_client.put(f"/api/v1/me/lessons/{lesson.id}/progress", json={"completed": True}).status_code == 200
+
+    now = utcnow()
+    all_time = admin_client.get(f"/api/v1/admin/reports/students/{student.id}/period")
+    assert all_time.status_code == 200, all_time.text
+    assert len(all_time.json()["completed_lessons"]) == 1
+
+    future_only = admin_client.get(
+        f"/api/v1/admin/reports/students/{student.id}/period",
+        params={"date_from": (now + timedelta(days=1)).isoformat()},
+    )
+    assert future_only.status_code == 200
+    assert future_only.json()["completed_lessons"] == []
+    assert future_only.json()["points_total"] == 0
+
+    invalid_range = admin_client.get(
+        f"/api/v1/admin/reports/students/{student.id}/period",
+        params={"date_from": now.isoformat(), "date_to": (now - timedelta(days=1)).isoformat()},
+    )
+    assert invalid_range.status_code == 422
+
+
+def test_student_period_pdf_export_smoke(admin_client, db_session):
+    student = _make_student(db_session, "TA-082021")
+    response = admin_client.get(f"/api/v1/admin/reports/students/{student.id}.pdf")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content[:4] == b"%PDF"
+
+
 def test_admin_student_points_history(admin_client, db_session):
     course = _make_course(db_session)
     section = Section(course_id=course.id, title="Sec", position=1)

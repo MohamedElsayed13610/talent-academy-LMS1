@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.errors import NotFoundError
 from app.models.files import File, FilePurpose
 from app.models.identity import User
 from app.services import storage_r2
@@ -35,6 +36,13 @@ def save_upload(db: Session, academy_id: int, purpose: str, content: bytes, orig
     db.add(row)
     db.commit()
     db.refresh(row)
+    return row
+
+
+def get_file_or_404(db: Session, academy_id: int, file_id: str) -> File:
+    row = db.get(File, file_id)
+    if not row or row.academy_id != academy_id:
+        raise NotFoundError(code="FILE_NOT_FOUND", message="الملف غير موجود")
     return row
 
 

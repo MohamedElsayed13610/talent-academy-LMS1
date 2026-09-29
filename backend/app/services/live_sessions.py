@@ -23,6 +23,7 @@ from app.models.live import AttendanceRecord, AttendanceSource, AttendanceStatus
 from app.models.points import PointSource
 from app.services import points as points_svc
 from app.services.audit import record_audit
+from app.services.excel_style import write_report_sheet
 from app.schemas.live import (
     AdminLiveSessionOut,
     AttendanceRow,
@@ -60,8 +61,15 @@ def _rate(present: int, late: int, total: int) -> int:
     return round((present + late) / total * 100) if total else 0
 
 
-def attendance_summary_for_student(db: Session, user_id: int) -> dict:
-    rows = db.execute(select(AttendanceRecord.status, func.count()).where(AttendanceRecord.user_id == user_id).group_by(AttendanceRecord.status)).all()
+def attendance_summary_for_student(db: Session, user_id: int, *, since=None, until=None) -> dict:
+    stmt = select(AttendanceRecord.status, func.count()).where(AttendanceRecord.user_id == user_id)
+    if since is not None or until is not None:
+        stmt = stmt.join(LiveSession, LiveSession.id == AttendanceRecord.live_session_id)
+        if since is not None:
+            stmt = stmt.where(LiveSession.starts_at >= since)
+        if until is not None:
+            stmt = stmt.where(LiveSession.starts_at <= until)
+    rows = db.execute(stmt.group_by(AttendanceRecord.status)).all()
     counts = {status.value: count for status, count in rows}
     present, late, absent, excused = counts.get("present", 0), counts.get("late", 0), counts.get("absent", 0), counts.get("excused", 0)
     total = present + late + absent + excused
@@ -299,17 +307,24 @@ def finalize(db: Session, academy_id: int, session: LiveSession, actor: User, re
     return attendance_sheet(db, academy_id, session)
 
 
-def export_attendance_xlsx(sheet: AttendanceSheetOut) -> bytes:
+def export_attendance_xlsx(sheet: AttendanceSheetOut, *, academy_name: str = "Talent Academy") -> bytes:
     labels = {"present": "حاضر", "late": "متأخر", "absent": "غائب", "excused": "بعذر", "unmarked": "غير محدد"}
     wb = Workbook()
     ws = wb.active
     ws.title = "Attendance"
-    ws.append(["Student ID", "Full Name", "Grade", "Status", "Joined At", "Note"])
-    for row in sheet.students:
-        ws.append([
+    rows = [
+        [
             row.student_code or "", row.full_name, row.grade_level or "", labels.get(row.status, row.status),
             row.joined_at.strftime("%Y-%m-%d %H:%M") if row.joined_at else "", row.note,
-        ])
+        ]
+        for row in sheet.students
+    ]
+    write_report_sheet(
+        ws, report_title=f"Attendance — {sheet.session.title}", headers=["Student ID", "Full Name", "Grade", "Status", "Joined At", "Note"],
+        rows=rows, academy_name=academy_name,
+        totals_row=["", f"Total: {len(sheet.students)}", "", f"P {sheet.counts.present} / L {sheet.counts.late} / A {sheet.counts.absent}", "", ""] if sheet.students else None,
+        column_widths=[14, 24, 8, 12, 16, 30],
+    )
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

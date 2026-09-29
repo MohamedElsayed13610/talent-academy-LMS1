@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 
 from app.api.v1 import (
     admin_announcements,
+    admin_dashboard,
     admin_reports,
+    admin_settings,
     auth,
     courses,
     exams,
@@ -43,6 +45,8 @@ router.include_router(me_dashboard.router)
 router.include_router(me_notifications.router)
 router.include_router(admin_announcements.router)
 router.include_router(admin_reports.router)
+router.include_router(admin_dashboard.router)
+router.include_router(admin_settings.router)
 
 
 @router.get("/health", tags=["health"])

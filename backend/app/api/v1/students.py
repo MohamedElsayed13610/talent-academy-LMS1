@@ -82,8 +82,10 @@ def import_commit(payload: ImportCommitRequest, request: Request, admin: User = 
 
 
 @router.post("/credentials.xlsx")
-def credentials_export(payload: CredentialsExportRequest, _: User = Depends(require_admin)):
-    content = excel_svc.build_credentials_workbook(payload.rows)
+def credentials_export(payload: CredentialsExportRequest, _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    from app.services.settings_svc import get_academy_display_name
+
+    content = excel_svc.build_credentials_workbook(payload.rows, academy_name=get_academy_display_name(db, academy_id))
     return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=student-credentials.xlsx"})
 
 
@@ -104,7 +106,9 @@ def students_export(
         current_page += 1
         if not next_page.items:
             break
-    content = excel_svc.build_students_export(all_rows)
+    from app.services.settings_svc import get_academy_display_name
+
+    content = excel_svc.build_students_export(all_rows, academy_name=get_academy_display_name(db, academy_id))
     return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=students.xlsx"})
 
 

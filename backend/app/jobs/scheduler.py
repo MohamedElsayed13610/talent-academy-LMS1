@@ -66,6 +66,7 @@ def run_locked(job_name: str, fn: Callable[[], str]) -> None:
 
 def start() -> None:
     from app.jobs.auto_submit import run as run_auto_submit
+    from app.jobs.backup import run as run_backup
     from app.jobs.file_cleanup import run as run_file_cleanup
 
     scheduler = _get_scheduler()
@@ -80,6 +81,9 @@ def start() -> None:
         # Every 30s per ARCHITECTURE.md §8 -- expired in-progress attempts must resolve promptly
         # even if the student never comes back to the tab.
         scheduler.add_job(lambda: run_locked("auto_submit", run_auto_submit), "interval", seconds=30, id="auto_submit", next_run_time=datetime.now(timezone.utc), misfire_grace_time=None)
+        # Once a day is enough for a small-academy Postgres dump; no next_run_time override, so the
+        # first run lands a day after each process start rather than dumping on every restart.
+        scheduler.add_job(lambda: run_locked("backup", run_backup), "interval", hours=24, id="backup", misfire_grace_time=None)
         scheduler.start()
 
 
