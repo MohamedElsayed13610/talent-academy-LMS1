@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowRight, Check, Download, MessageSquare, Search } from "lucide-react";
+import { ArrowRight, Check, Download, MessageSquare, Pencil, Search } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,7 @@ export default function AttendanceSheetPage() {
   const [noteTarget, setNoteTarget] = useState<AttendanceRow | null>(null);
   const [confirmFinalize, setConfirmFinalize] = useState(false);
   const [pendingStudentId, setPendingStudentId] = useState<number | null>(null);
+  const [unlockedForEdit, setUnlockedForEdit] = useState(false);
 
   const { data: sheet, isLoading, error, refetch } = useAttendanceSheet(sessionId);
   const updateAttendance = useUpdateAttendance(sessionId);
@@ -55,7 +56,7 @@ export default function AttendanceSheetPage() {
   async function handleFinalize() {
     try {
       await finalizeAttendance.mutateAsync();
-      toast.success("تم إنهاء تسجيل الحضور — الباقي اتحسب غياب");
+      toast.success("تم اعتماد الحضور والغياب");
       setConfirmFinalize(false);
     } catch {
       // toast already shown globally
@@ -97,14 +98,31 @@ export default function AttendanceSheetPage() {
         <div className="flex items-center gap-2">
           <Button variant="secondary" size="sm" onClick={exportXlsx}><Download size={15} /> تصدير Excel</Button>
           {!session.attendance_finalized_at ? (
-            <Button size="sm" onClick={() => setConfirmFinalize(true)} disabled={counts.unmarked === 0}>
-              تعليم الباقي غياب (إنهاء)
+            <Button
+              size="sm"
+              onClick={() => setConfirmFinalize(true)}
+              disabled={counts.unmarked > 0}
+              title={counts.unmarked > 0 ? `لازم تحدد حالة ${counts.unmarked} طالب الأول` : undefined}
+            >
+              اعتماد الحضور والغياب
             </Button>
           ) : (
-            <Badge tone="success"><Check size={13} /> تم إنهاء الحضور</Badge>
+            <>
+              <Badge tone="success"><Check size={13} /> تم اعتماد الحضور والغياب</Badge>
+              {!unlockedForEdit ? (
+                <Button variant="secondary" size="sm" onClick={() => setUnlockedForEdit(true)}>
+                  <Pencil size={14} /> تعديل السجل
+                </Button>
+              ) : (
+                <Badge tone="warning">وضع التعديل مفعّل</Badge>
+              )}
+            </>
           )}
         </div>
       </div>
+      {session.attendance_finalized_at && counts.unmarked > 0 ? (
+        <p className="mt-2 text-caption text-warning-fg">تنبيه: يوجد {counts.unmarked} طالب بدون حالة رغم اعتماد الحضور — راجع السجل.</p>
+      ) : null}
 
       <div className="mt-4 flex flex-col gap-2">
         {students.map((row) => (
@@ -122,7 +140,7 @@ export default function AttendanceSheetPage() {
               {STATUSES.map((s) => (
                 <button
                   key={s.value}
-                  disabled={pendingStudentId === row.student_id}
+                  disabled={pendingStudentId === row.student_id || (!!session.attendance_finalized_at && !unlockedForEdit)}
                   onClick={() => setStatus(row.student_id, row.status === s.value ? "unmarked" : s.value)}
                   className={`h-11 min-w-[70px] rounded-md border px-3 text-body-sm font-medium transition-colors disabled:opacity-50 ${
                     row.status === s.value
@@ -170,10 +188,11 @@ export default function AttendanceSheetPage() {
       <ConfirmDialog
         open={confirmFinalize}
         onOpenChange={setConfirmFinalize}
-        title="إنهاء تسجيل الحضور"
+        title="اعتماد الحضور والغياب"
+        confirmLabel="اعتماد"
         loading={finalizeAttendance.isPending}
         onConfirm={handleFinalize}
-        description={`سيتم تعليم ${counts.unmarked} طالب "غير محدد" كـ غائب. لا يمكن التراجع عن هذا تلقائيًا.`}
+        description="سيتم اعتماد حالة الحضور لكل الطلاب كما هي معروضة الآن. يمكنك تعديل السجل لاحقًا عبر زر «تعديل السجل»."
       />
     </div>
   );

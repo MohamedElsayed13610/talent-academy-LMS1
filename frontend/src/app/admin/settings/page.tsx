@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Database, Plus, ScrollText, Settings2, ShieldCheck, Trash2, UserCog } from "lucide-react";
+import { KeyRound, Plus, ScrollText, Settings2, ShieldCheck, Trash2, UserCog } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,8 +17,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUploadFile } from "@/hooks/use-courses";
 import {
-  useAcademySettings, useAdminAccounts, useAuditLog, useBackupStatus, useCreateAdminAccount,
-  useDeleteAdminAccount, useUpdateAcademySettings, useUpdateAdminAccount,
+  useAcademySettings, useAdminAccounts, useAuditLog, useCreateAdminAccount,
+  useDeleteAdminAccount, useResetAdminPassword, useUpdateAcademySettings, useUpdateAdminAccount,
 } from "@/hooks/use-admin-settings";
 import { useMe } from "@/hooks/use-auth";
 import { ApiError } from "@/lib/api";
@@ -45,15 +45,15 @@ export default function AdminSettingsPage() {
           <TabsTrigger value="rules"><ShieldCheck size={15} className="me-1.5 inline" /> النقاط والحدود</TabsTrigger>
           <TabsTrigger value="admins"><UserCog size={15} className="me-1.5 inline" /> حسابات الإدارة</TabsTrigger>
           <TabsTrigger value="audit"><ScrollText size={15} className="me-1.5 inline" /> سجل النشاط</TabsTrigger>
-          <TabsTrigger value="backup"><Database size={15} className="me-1.5 inline" /> النسخ الاحتياطي</TabsTrigger>
         </TabsList>
 
         <TabsContent value="branding" className="mt-6"><BrandingSection /></TabsContent>
         <TabsContent value="rules" className="mt-6"><RulesSection /></TabsContent>
         <TabsContent value="admins" className="mt-6"><AdminsSection /></TabsContent>
         <TabsContent value="audit" className="mt-6"><AuditSection /></TabsContent>
-        <TabsContent value="backup" className="mt-6"><BackupSection /></TabsContent>
       </Tabs>
+      {/* Backup status/controls are deliberately not surfaced here (Scope E): backup is
+          technical-operator functionality only, never shown to the academy admin. */}
     </div>
   );
 }
@@ -209,23 +209,30 @@ function RulesSection() {
 
 // -------------------------------------------------------------------------------------- admins ----
 
+const EMPTY_CREATE_FORM = { full_name: "", email: "", title: "", password: "" };
+
 function AdminsSection() {
   const { data, isLoading, error, refetch } = useAdminAccounts();
   const { data: me } = useMe();
   const createAdmin = useCreateAdminAccount();
   const updateAdmin = useUpdateAdminAccount();
   const deleteAdmin = useDeleteAdminAccount();
+  const resetPassword = useResetAdminPassword();
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [form, setForm] = useState({ full_name: "", email: "", title: "" });
+  const [form, setForm] = useState(EMPTY_CREATE_FORM);
   const [deleteTarget, setDeleteTarget] = useState<AdminAccountOut | null>(null);
+  const [resetTarget, setResetTarget] = useState<AdminAccountOut | null>(null);
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
+
+  const canManageAdmins = me?.is_primary_admin === true;
 
   async function submitCreate() {
     try {
-      const result = await createAdmin.mutateAsync({ full_name: form.full_name, email: form.email, title: form.title || undefined });
-      toast.success(result.generated_password ? `تم إنشاء الحساب — كلمة المرور: ${result.generated_password}` : "تم إنشاء الحساب");
+      await createAdmin.mutateAsync({ full_name: form.full_name, email: form.email, title: form.title || undefined, password: form.password });
+      toast.success("تم إنشاء الحساب");
       setCreateOpen(false);
-      setForm({ full_name: "", email: "", title: "" });
+      setForm(EMPTY_CREATE_FORM);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "تعذر إنشاء الحساب");
     }
@@ -250,14 +257,30 @@ function AdminsSection() {
     }
   }
 
+  async function submitReset() {
+    if (!resetTarget) return;
+    try {
+      await resetPassword.mutateAsync({ id: resetTarget.id, payload: { new_password: resetPasswordValue } });
+      toast.success(`تم تغيير كلمة مرور ${resetTarget.full_name}`);
+      setResetTarget(null);
+      setResetPasswordValue("");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر تغيير كلمة المرور");
+    }
+  }
+
   if (error) return <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل الحسابات"} onRetry={() => refetch()} />;
   if (isLoading) return <Skeleton className="h-64 w-full" />;
 
   return (
     <div>
-      <div className="mb-4 flex justify-end">
-        <Button onClick={() => setCreateOpen(true)}><Plus size={16} /> حساب إداري جديد</Button>
-      </div>
+      {canManageAdmins ? (
+        <div className="mb-4 flex justify-end">
+          <Button onClick={() => setCreateOpen(true)}><Plus size={16} /> حساب إداري جديد</Button>
+        </div>
+      ) : (
+        <p className="mb-4 text-body-sm text-text-muted">إدارة الحسابات الإدارية (إنشاء، حذف، إيقاف، إعادة تعيين كلمة المرور) متاحة للأدمن الرئيسي فقط.</p>
+      )}
 
       {(data?.length || 0) === 0 ? (
         <EmptyState icon={UserCog} title="لا يوجد حسابات إدارية" description="أضف أول حساب إداري." />
@@ -266,13 +289,22 @@ function AdminsSection() {
           {data!.map((admin) => (
             <div key={admin.id} className="flex items-center justify-between gap-3 border-b border-border px-4 py-3 text-body-sm last:border-b-0">
               <div>
-                <div className="font-medium">{admin.full_name}{admin.id === me?.id ? <span className="text-text-subtle"> (أنت)</span> : null}</div>
+                <div className="flex items-center gap-2 font-medium">
+                  {admin.full_name}
+                  {admin.id === me?.id ? <span className="font-normal text-text-subtle">(أنت)</span> : null}
+                  {admin.is_primary ? <Badge tone="primary">الأدمن الرئيسي</Badge> : null}
+                </div>
                 <div className="text-caption text-text-subtle">{admin.email}{admin.title ? ` · ${admin.title}` : ""}</div>
               </div>
               <div className="flex items-center gap-3">
                 {admin.last_login_at ? <span className="text-caption text-text-subtle">آخر دخول {formatCairo(admin.last_login_at)}</span> : null}
-                <Switch checked={admin.is_active} onCheckedChange={() => toggleActive(admin)} disabled={admin.id === me?.id} />
-                <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(admin)} disabled={admin.id === me?.id}><Trash2 size={16} /></Button>
+                {canManageAdmins ? (
+                  <>
+                    <Button variant="ghost" size="icon" title="إعادة تعيين كلمة المرور" onClick={() => setResetTarget(admin)}><KeyRound size={16} /></Button>
+                    <Switch checked={admin.is_active} onCheckedChange={() => toggleActive(admin)} disabled={admin.id === me?.id || admin.is_primary} />
+                    <Button variant="ghost" size="icon" onClick={() => setDeleteTarget(admin)} disabled={admin.id === me?.id || admin.is_primary}><Trash2 size={16} /></Button>
+                  </>
+                ) : null}
               </div>
             </div>
           ))}
@@ -295,7 +327,25 @@ function AdminsSection() {
               <Label htmlFor="new-admin-title">المسمى الوظيفي (اختياري)</Label>
               <Input id="new-admin-title" className="mt-1.5" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
             </div>
-            <Button className="self-start" onClick={submitCreate} loading={createAdmin.isPending} disabled={!form.full_name || !form.email}>إنشاء</Button>
+            <div>
+              <Label htmlFor="new-admin-password">كلمة المرور</Label>
+              <Input id="new-admin-password" type="password" dir="ltr" minLength={8} className="mt-1.5" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              <p className="mt-1 text-caption text-text-subtle">أدخل كلمة مرور للحساب الجديد مباشرة — لا يتم توليدها تلقائيًا.</p>
+            </div>
+            <Button className="self-start" onClick={submitCreate} loading={createAdmin.isPending} disabled={!form.full_name || !form.email || form.password.length < 8}>إنشاء</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={resetTarget !== null} onOpenChange={(open) => { if (!open) { setResetTarget(null); setResetPasswordValue(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>إعادة تعيين كلمة مرور {resetTarget?.full_name}</DialogTitle></DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div>
+              <Label htmlFor="reset-password">كلمة المرور الجديدة</Label>
+              <Input id="reset-password" type="password" dir="ltr" minLength={8} className="mt-1.5" value={resetPasswordValue} onChange={(e) => setResetPasswordValue(e.target.value)} />
+            </div>
+            <Button className="self-start" onClick={submitReset} loading={resetPassword.isPending} disabled={resetPasswordValue.length < 8}>حفظ كلمة المرور</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -338,34 +388,3 @@ function AuditSection() {
   );
 }
 
-// --------------------------------------------------------------------------------------- backup ----
-
-function BackupSection() {
-  const { data, isLoading, error, refetch } = useBackupStatus();
-
-  if (error) return <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل حالة النسخ الاحتياطي"} onRetry={() => refetch()} />;
-  if (isLoading || !data) return <Skeleton className="h-40 w-full" />;
-
-  return (
-    <Card className="max-w-xl">
-      <CardHeader><CardTitle>النسخ الاحتياطي</CardTitle></CardHeader>
-      <div className="flex flex-col gap-3 text-body-sm">
-        <div className="flex items-center justify-between rounded-md bg-surface-2 px-3.5 py-2.5">
-          <span>الحالة</span>
-          <Badge tone={data.configured ? "success" : "danger"}>{data.configured ? "مفعّل" : "غير مفعّل"}</Badge>
-        </div>
-        <div className="flex items-center justify-between rounded-md bg-surface-2 px-3.5 py-2.5">
-          <span>آخر نسخة احتياطية</span>
-          <span className="text-text-muted">{data.last_run_at ? formatCairo(data.last_run_at) : "لسه مفيش نسخة اتعملت"}</span>
-        </div>
-        {data.last_status ? (
-          <div className="flex items-center justify-between rounded-md bg-surface-2 px-3.5 py-2.5">
-            <span>نتيجة آخر تشغيل</span>
-            <Badge tone={data.last_status === "ok" ? "success" : "danger"}>{data.last_status === "ok" ? "نجحت" : "فشلت"}</Badge>
-          </div>
-        ) : null}
-        <p className="text-caption text-text-subtle">النسخ الاحتياطي يعمل تلقائيًا مرة كل يوم، ويُحفظ في تخزين منفصل عن قاعدة البيانات الأساسية.</p>
-      </div>
-    </Card>
-  );
-}

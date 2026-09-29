@@ -57,7 +57,7 @@ export default function AdminOverviewPage() {
             <StatTile icon={CalendarClock} label="حصص قادمة (٧ أيام)" value={data.sessions.upcoming_7d} hint={data.sessions.live_now > 0 ? `${data.sessions.live_now} مباشرة الآن` : undefined} />
             <StatTile icon={FileQuestion} label="امتحانات مفتوحة الآن" value={data.exams.open_now} hint={`${data.exams.upcoming_7d} قادمة`} tone="accent" />
             <StatTile icon={CheckCircle2} label="نسبة الحضور (٣٠ يوم)" value={`${data.attendance.rate_30d}%`} hint={`${data.attendance.records_30d} سجل`} />
-            <StatTile icon={ListChecks} label="حصص محتاجة تفريغ حضور" value={data.sessions.pending_finalization} tone="accent" />
+            <StatTile icon={ListChecks} label="حصص محتاجة اعتماد الحضور" value={data.sessions.pending_finalization} tone="accent" />
           </div>
 
           <div className="mt-6 grid gap-4 lg:grid-cols-2">

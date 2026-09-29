@@ -169,7 +169,7 @@ export default function AdminStudentsPage() {
         <div>
           <span className="text-overline text-primary">STUDENTS</span>
           <h1 className="mt-1 text-h1">الطلاب</h1>
-          <p className="mt-1 text-body-sm text-text-muted">أدخل Student ID كما هو في شيت الأكاديمية. الصف بيانات فقط ولا يضيف الطالب تلقائيًا لأي كورس.</p>
+          <p className="mt-1 text-body-sm text-text-muted">يتم توليد Student ID تلقائيًا عند الإنشاء. الصف بيانات فقط ولا يضيف الطالب تلقائيًا لأي كورس.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" onClick={exportExcel}>
@@ -350,7 +350,7 @@ export default function AdminStudentsPage() {
             <span>
               سيتم حذف كل بياناته نهائيًا: {deletePreview.data.enrollments} اشتراك كورس، {deletePreview.data.groups} عضوية مجموعة،{" "}
               {deletePreview.data.attempts} محاولة امتحان، {deletePreview.data.attendance} سجل حضور، {deletePreview.data.points} حركة نقاط.
-              كود الطالب هيبقى متاح للاستخدام تاني فورًا.
+              كود الطالب لن يُستخدم لطالب آخر أبدًا.
             </span>
           ) : (
             "جارٍ تحميل البيانات..."

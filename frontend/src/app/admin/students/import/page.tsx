@@ -120,7 +120,7 @@ export default function StudentImportPage() {
                 {preview.rows.map((row) => (
                   <tr key={row.row_no} className={`border-t border-border ${row.errors.length ? "bg-danger-soft/40" : ""}`}>
                     <td className="p-2 text-text-muted">{row.row_no}</td>
-                    <td className="p-2 ltr">{row.data.student_code}</td>
+                    <td className="p-2 ltr text-text-muted">{row.data.student_code || "(تلقائي)"}</td>
                     <td className="p-2">{row.data.full_name}</td>
                     <td className="p-2">
                       {row.errors.length ? (

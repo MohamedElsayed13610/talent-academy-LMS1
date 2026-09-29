@@ -6,9 +6,9 @@ import type {
   AcademySettingsOut,
   AcademySettingsUpdate,
   AdminAccountCreate,
-  AdminAccountCreateResponse,
   AdminAccountOut,
   AdminAccountUpdate,
+  AdminResetPasswordRequest,
   AuditLogRow,
   BackupStatusOut,
   Page,
@@ -49,7 +49,7 @@ export function useAdminAccounts() {
 export function useCreateAdminAccount() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: AdminAccountCreate) => api.post<AdminAccountCreateResponse>("/admin/admins", payload),
+    mutationFn: (payload: AdminAccountCreate) => api.post<AdminAccountOut>("/admin/admins", payload),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "admins"] }),
   });
 }
@@ -67,6 +67,12 @@ export function useDeleteAdminAccount() {
   return useMutation({
     mutationFn: (id: number) => api.delete<void>(`/admin/admins/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "admins"] }),
+  });
+}
+
+export function useResetAdminPassword() {
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: AdminResetPasswordRequest }) => api.post<void>(`/admin/admins/${id}/reset-password`, payload),
   });
 }
 

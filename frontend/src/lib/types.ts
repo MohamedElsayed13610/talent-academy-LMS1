@@ -9,6 +9,7 @@ export interface Me {
   grade_level: "G10" | "G11" | "G12" | null;
   student_type: "academy" | "external" | null;
   must_change_password: boolean;
+  is_primary_admin: boolean | null;
 }
 
 export interface LoginResponse {
@@ -73,7 +74,8 @@ export interface StudentDetail extends StudentRow {
 }
 
 export interface StudentCreateInput {
-  student_code: string;
+  // No student_code: the backend always generates it (Scope B). Still editable afterwards via
+  // StudentUpdateInput, for the rare manual correction.
   full_name: string;
   email?: string | null;
   guardian_phone?: string;
@@ -88,6 +90,7 @@ export interface StudentCreateInput {
 }
 
 export type StudentUpdateInput = Partial<Omit<StudentCreateInput, "password" | "course_ids" | "group_ids">> & {
+  student_code?: string;
   is_active?: boolean;
 };
 
@@ -1072,6 +1075,7 @@ export interface AdminAccountOut {
   email: string | null;
   title: string | null;
   is_active: boolean;
+  is_primary: boolean;
   last_login_at: string | null;
   created_at: string;
 }
@@ -1080,12 +1084,7 @@ export interface AdminAccountCreate {
   full_name: string;
   email: string;
   title?: string | null;
-  password?: string | null;
-}
-
-export interface AdminAccountCreateResponse {
-  admin: AdminAccountOut;
-  generated_password: string | null;
+  password: string;
 }
 
 export interface AdminAccountUpdate {
@@ -1093,6 +1092,15 @@ export interface AdminAccountUpdate {
   email?: string;
   title?: string | null;
   is_active?: boolean;
+}
+
+export interface AdminResetPasswordRequest {
+  new_password: string;
+}
+
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
 }
 
 export interface AuditLogRow {

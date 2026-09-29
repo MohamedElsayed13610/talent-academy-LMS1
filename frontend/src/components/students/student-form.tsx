@@ -28,7 +28,6 @@ export function StudentFormFields({ mode, initial, loading, error, onSubmit }: S
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const payload: StudentCreateInput & StudentUpdateInput = {
-      student_code: String(form.get("student_code") || "").trim(),
       full_name: String(form.get("full_name") || "").trim(),
       email: String(form.get("email") || "").trim() || null,
       guardian_phone: String(form.get("guardian_phone") || "").trim(),
@@ -44,16 +43,20 @@ export function StudentFormFields({ mode, initial, loading, error, onSubmit }: S
       const password = String(form.get("password") || "").trim();
       if (password) payload.password = password;
       if (courseId) payload.course_ids = [Number(courseId)];
+    } else {
+      payload.student_code = String(form.get("student_code") || "").trim();
     }
     onSubmit(payload);
   }
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="student_code">Student ID</Label>
-        <Input id="student_code" name="student_code" dir="ltr" required minLength={1} maxLength={32} defaultValue={initial?.student_code || ""} placeholder="TA-000123" autoCapitalize="characters" />
-      </div>
+      {mode === "edit" ? (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="student_code">Student ID</Label>
+          <Input id="student_code" name="student_code" dir="ltr" required minLength={1} maxLength={32} defaultValue={initial?.student_code || ""} placeholder="TA-000123" autoCapitalize="characters" />
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="full_name">اسم الطالب</Label>
         <Input id="full_name" name="full_name" required minLength={2} defaultValue={initial?.full_name || ""} placeholder="محمد أحمد" />
@@ -145,7 +148,7 @@ export function StudentFormDrawer(props: StudentFormProps) {
       <DialogHeader>
         <DialogTitle>{props.mode === "create" ? "إضافة طالب جديد" : `تعديل ${props.initial?.full_name}`}</DialogTitle>
         <DialogDescription>
-          {props.mode === "create" ? "اكتب Student ID الموجود في شيت الأكاديمية. لن يتم إنشاء ID تلقائي." : "الصف بيانات فقط ولا يضيف الطالب تلقائيًا لأي مجموعة أو كورس."}
+          {props.mode === "create" ? "سيتم توليد Student ID تلقائيًا بصيغة TA-000001 عند الإنشاء." : "الصف بيانات فقط ولا يضيف الطالب تلقائيًا لأي مجموعة أو كورس."}
         </DialogDescription>
       </DialogHeader>
       <StudentFormFields {...props} />
