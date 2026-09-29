@@ -217,7 +217,13 @@ def start_or_resume(db: Session, academy_id: int, user: User, exam_id: int, requ
         if existing.status == AttemptStatus.granted:
             existing.status = AttemptStatus.in_progress
             existing.started_at = utcnow()
-            existing.expires_at = _compute_expiry(exam, existing.started_at)
+            # An admin-granted attempt bypasses the exam window (ARCHITECTURE.md §4.4) -- the
+            # whole point of granting one is to let the student in after starts_at/ends_at would
+            # otherwise block them. Any extra_minutes the admin attached at grant time (Phase 7
+            # new-attempt action) is added on top of the exam's normal duration.
+            existing.expires_at = _compute_expiry(exam, existing.started_at, bypass_window=True)
+            if existing.extra_minutes:
+                existing.expires_at += timedelta(minutes=existing.extra_minutes)
             db.add(ExamAttemptEvent(attempt_id=existing.id, event_type=AttemptEventType.started, actor_id=user.id))
             db.commit()
         return _attempt_payload(db, existing)
@@ -256,9 +262,9 @@ def start_or_resume(db: Session, academy_id: int, user: User, exam_id: int, requ
     return _attempt_payload(db, attempt)
 
 
-def _compute_expiry(exam: Exam, started_at):
+def _compute_expiry(exam: Exam, started_at, bypass_window: bool = False):
     natural_end = started_at + timedelta(minutes=exam.duration_minutes)
-    if exam.ends_at:
+    if exam.ends_at and not bypass_window:
         return min(natural_end, exam.ends_at)
     return natural_end
 
@@ -394,7 +400,15 @@ def grade_attempt(db: Session, attempt: ExamAttempt) -> None:
 def award_exam_points(db: Session, academy_id: int, exam: Exam, user_id: int) -> int:
     """event_key is exam:{exam_id} (per attempt) -- points are the best-percentage-so-far
     (ARCHITECTURE.md §4.2), so a worse retake never lowers points and re-grading a job-expired
-    attempt never double-counts (idempotent award() upsert on the same event_key)."""
+    attempt never double-counts (idempotent award() upsert on the same event_key).
+
+    Every caller sets attempt.status/percentage on the ORM object just before calling this, and the
+    session runs with autoflush=False (app/db/session.py) -- without this flush, the MAX(percentage)
+    query below would run against the database's *old* row for this exact attempt and miss its own
+    just-submitted result, undercounting a student's first-ever submission on an exam (caught live:
+    a fresh 100% submission was credited only the flat exam_submit base, not the exam_100 bonus,
+    until a second attempt's award() call incidentally flushed it and corrected the ledger total)."""
+    db.flush()
     best = db.scalar(
         select(func.max(ExamAttempt.percentage)).where(
             ExamAttempt.exam_id == exam.id, ExamAttempt.user_id == user_id, ExamAttempt.status.in_(_TERMINAL_NON_SUPERSEDED),

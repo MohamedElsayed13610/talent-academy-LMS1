@@ -8,6 +8,7 @@ from app.core.errors import NotFoundError
 from app.db.session import get_db
 from app.models.exams import ExamPassage
 from app.models.identity import User
+from app.schemas.admin_attempts import AdminAttemptDetail, AdminAttemptRow, ExtraTimeIn, NewAttemptIn, UnlockAttemptIn
 from app.schemas.common import Page
 from app.schemas.exams import (
     AdminExamDetail,
@@ -26,11 +27,13 @@ from app.schemas.exams import (
     QuestionPatch,
     TextQuestionIn,
 )
+from app.services import admin_attempts as attempts_svc
 from app.services import exams as svc
 
 router = APIRouter(prefix="/admin/exams", tags=["admin:exams"])
 questions_router = APIRouter(prefix="/admin/questions", tags=["admin:exams"])
 passages_router = APIRouter(prefix="/admin/passages", tags=["admin:exams"])
+attempts_router = APIRouter(prefix="/admin/attempts", tags=["admin:exams"])
 
 
 @router.get("", response_model=Page[AdminExamRow])
@@ -119,6 +122,15 @@ def apply_answer_key(exam_id: int, payload: AnswerKeyApplyIn, request: Request, 
     return svc.apply_answer_key(db, academy_id, exam, payload.answers, payload.points_per_question, payload.publish, admin, request)
 
 
+@router.get("/{exam_id}/attempts", response_model=Page[AdminAttemptRow])
+def list_exam_attempts(
+    exam_id: int, status: str | None = None, page: int = 1, page_size: int = Query(default=25, le=100),
+    _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db),
+):
+    exam = svc.get_exam_or_404(db, academy_id, exam_id)
+    return attempts_svc.list_attempts(db, academy_id, exam, status, page, page_size)
+
+
 def _exam_for_question(db: Session, academy_id: int, question_id: int):
     question = svc.get_question_or_404(db, question_id)
     exam = svc.get_exam_or_404(db, academy_id, question.exam_id)
@@ -182,3 +194,29 @@ async def upload_passage_image(passage_id: int, request: Request, file: UploadFi
     passage, exam = _exam_for_passage(db, academy_id, passage_id)
     content = await file.read()
     return svc.upload_passage_image(db, academy_id, exam, passage, file.filename or "", content, admin, request)
+
+
+# ------------------------------------------------------------------------------- attempts (Phase 7) ----
+
+@attempts_router.get("/{attempt_id}", response_model=AdminAttemptDetail)
+def get_attempt(attempt_id: int, _: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    attempt = attempts_svc.get_attempt_or_404(db, academy_id, attempt_id)
+    return attempts_svc.get_attempt_detail(db, academy_id, attempt)
+
+
+@attempts_router.post("/{attempt_id}/unlock", response_model=AdminAttemptDetail)
+def unlock_attempt(attempt_id: int, payload: UnlockAttemptIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    attempt = attempts_svc.get_attempt_or_404(db, academy_id, attempt_id)
+    return attempts_svc.unlock_attempt(db, academy_id, attempt, payload.reason, payload.extra_minutes, admin, request)
+
+
+@attempts_router.post("/{attempt_id}/extra-time", response_model=AdminAttemptDetail)
+def grant_extra_time(attempt_id: int, payload: ExtraTimeIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    attempt = attempts_svc.get_attempt_or_404(db, academy_id, attempt_id)
+    return attempts_svc.grant_extra_time(db, academy_id, attempt, payload.reason, payload.minutes, admin, request)
+
+
+@attempts_router.post("/{attempt_id}/new-attempt", response_model=AdminAttemptDetail)
+def grant_new_attempt(attempt_id: int, payload: NewAttemptIn, request: Request, admin: User = Depends(require_admin), academy_id: int = Depends(current_academy_id), db: Session = Depends(get_db)):
+    attempt = attempts_svc.get_attempt_or_404(db, academy_id, attempt_id)
+    return attempts_svc.grant_new_attempt(db, academy_id, attempt, payload.reason, payload.extra_minutes, admin, request)

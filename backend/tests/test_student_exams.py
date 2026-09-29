@@ -259,6 +259,36 @@ def test_manual_submit_grades_objectively_and_awards_points_once(admin_client, c
     assert ledger_count_after == 1
 
 
+def test_first_submission_awards_full_tier_bonus_immediately(admin_client, client, db_session):
+    """Regression: award_exam_points() re-queries MAX(percentage) from the database, and without an
+    explicit flush first, that query missed the attempt's own just-set status/percentage (session
+    runs with autoflush=False) -- a fresh 100% submission was credited only the flat exam_submit
+    base (5), not the exam_100 tier bonus (20), until some later, unrelated attempt happened to
+    flush and silently corrected the ledger total. Pins the exact points value on the very first
+    submit so this can't regress unnoticed again.
+    """
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    question = _add_text_question(admin_client, exam["id"], correct="A", points=1)
+    _publish(admin_client, exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+
+    choice_a = next(c for c in question["choices"] if c["label"] == "A")
+    submit = student_client.post(f"/api/v1/me/attempts/{attempt_id}/submit", json={"client_seq": 1, "answers": [{"question_id": question["id"], "choice_id": choice_a["id"]}]})
+    assert submit.status_code == 200, submit.text
+    result = submit.json()
+    assert result["percentage"] == 100
+    # Default seeded point_values (migration 0001): exam_submit=5, exam_100=20.
+    assert result["points_awarded"] == 25
+
+    ledger = db_session.query(PointLedger).filter(PointLedger.source_type == PointSource.exam, PointLedger.source_id == exam["id"], PointLedger.user_id == student.id).one()
+    assert ledger.points == 25
+
+
 def test_auto_submit_job_expires_and_grades_overdue_attempt(admin_client, client, db_session):
     course = _make_course(db_session)
     exam = _create_exam_via_api(admin_client, course.id, duration_minutes=1)

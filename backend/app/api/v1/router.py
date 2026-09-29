@@ -21,6 +21,7 @@ router.include_router(me_live.router)
 router.include_router(exams.router)
 router.include_router(exams.questions_router)
 router.include_router(exams.passages_router)
+router.include_router(exams.attempts_router)
 router.include_router(me_exams.router)
 
 
