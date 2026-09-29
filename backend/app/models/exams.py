@@ -112,7 +112,11 @@ class ExamPassage(Base, TimestampMixin):
     position: Mapped[int] = mapped_column(Integer, default=0)
 
     exam: Mapped[Exam] = relationship(back_populates="passages")
-    questions: Mapped[list["ExamQuestion"]] = relationship(back_populates="passage", order_by="ExamQuestion.position")
+    # The database FK owns the unlink operation (ON DELETE SET NULL).  passive_deletes avoids
+    # SQLAlchemy loading/updating every linked question before a passage can be deleted.
+    questions: Mapped[list["ExamQuestion"]] = relationship(
+        back_populates="passage", order_by="ExamQuestion.position", passive_deletes=True
+    )
     image_file: Mapped["File | None"] = relationship(foreign_keys=[image_file_id])
 
 

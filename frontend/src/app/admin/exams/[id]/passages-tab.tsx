@@ -156,7 +156,16 @@ function PassageCard({ exam, passage, isFirst, isLast, onMove }: {
         title={`حذف مقطع "${passage.title || passage.position}"`}
         destructive
         loading={deletePassage.isPending}
-        onConfirm={async () => { await deletePassage.mutateAsync(passage.id); setConfirmDelete(false); toast.success("تم حذف المقطع"); }}
+        onConfirm={async () => {
+          try {
+            await deletePassage.mutateAsync(passage.id);
+            setConfirmDelete(false);
+            toast.success("تم حذف المقطع");
+          } catch {
+            // The global mutation handler shows the backend's message. Keep the dialog open so
+            // the admin can retry instead of leaking an unhandled rejected promise.
+          }
+        }}
         description="الأسئلة المرتبطة بهذا المقطع لن تُحذف، لكنها ستفقد ارتباطها به."
       />
     </div>

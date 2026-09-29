@@ -1,4 +1,4 @@
-name: talent-academy-lms-dev
+﻿name: talent-academy-lms-dev
 
 services:
   postgres:
@@ -17,7 +17,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # S3-compatible stand-in for Cloudflare R2 in local dev (ARCHITECTURE.md §10).
+  # S3-compatible stand-in for Cloudflare R2 in local dev (ARCHITECTURE.md Â§10).
   minio:
     image: bitnamilegacy/minio:2025.7.23-debian-12-r5
 
@@ -46,6 +46,8 @@ services:
       R2_PUBLIC_ENDPOINT_URL: http://localhost:9000
       R2_ACCESS_KEY_ID: talent-dev
       R2_SECRET_ACCESS_KEY: talent-dev-secret
+      # MinIO defaults to us-east-1. Cloudflare R2 uses "auto" in production instead.
+      R2_REGION: us-east-1
     ports:
       - "8000:8000"
     volumes:
@@ -65,8 +67,9 @@ services:
       - ./frontend:/app
       - /app/node_modules
       - /app/.next
-    command: sh -c "npm run dev"
+    command: sh -c "npm ci && npm run dev"
 
 volumes:
   talent_pg_data:
   talent_minio_data:
+

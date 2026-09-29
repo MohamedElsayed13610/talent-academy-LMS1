@@ -54,7 +54,9 @@ def _client(endpoint_url: str | None = None):
         aws_access_key_id=settings.r2_access_key_id,
         aws_secret_access_key=settings.r2_secret_access_key,
         region_name=settings.r2_region,
-        config=BotoConfig(signature_version="s3v4"),
+        # Path-style URLs work with both Cloudflare R2 and local MinIO and avoid generating a
+        # browser-unresolvable host such as talent-files.localhost in development.
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
 
 

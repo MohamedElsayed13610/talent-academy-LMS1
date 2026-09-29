@@ -575,8 +575,9 @@ def upload_passage_image(db: Session, academy_id: int, exam: Exam, passage: Exam
 
 def delete_passage(db: Session, academy_id: int, exam: Exam, passage: ExamPassage, actor: User, request: Request | None) -> AdminExamDetail:
     # ON DELETE SET NULL (exam_questions.passage_id) -- linked questions survive, just lose the link.
+    passage_id = passage.id
     db.delete(passage)
-    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.delete", entity_type="exam", entity_id=str(exam.id), summary={"passage_id": passage.id}, request=request)
+    record_audit(db, academy_id=academy_id, actor=actor, action="exam.passage.delete", entity_type="exam", entity_id=str(exam.id), summary={"passage_id": passage_id}, request=request)
     db.commit()
     return exam_detail(db, exam)
 

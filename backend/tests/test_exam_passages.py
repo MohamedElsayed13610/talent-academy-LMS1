@@ -9,7 +9,7 @@ from app.core.security import hash_password
 from app.db.scope import get_default_academy_id
 from app.models.courses import Course, CourseAccent
 from app.models.exams import Exam, ExamPassage, ExamQuestion
-from app.models.files import PendingFileDeletion
+from app.models.files import File, PendingFileDeletion
 from app.models.groups import Enrollment
 from app.models.identity import StudentProfile, StudentType, SubscriptionStatus, User, UserRole
 
@@ -166,6 +166,43 @@ def test_passage_image_upload_and_validation(admin_client, db_session, fake_s3):
     bad = admin_client.post(f"/api/v1/admin/passages/{passage['id']}/image", files={"file": ("p.png", b"not an image", "image/png")})
     assert bad.status_code == 422
     assert bad.json()["error"]["code"] == "FILE_TYPE_NOT_ALLOWED"
+
+
+def test_delete_passage_with_image_and_linked_question_queues_cleanup(admin_client, db_session, fake_s3):
+    """Regression: this exact combination failed on long-lived databases whose cleanup-table
+    defaults predated the fixed 0001 migration.  The passage disappears, its question survives
+    unlinked, and its object is queued for the asynchronous cleanup job.
+    """
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    question = _add_text_question(admin_client, exam["id"])
+    passage = admin_client.post(
+        f"/api/v1/admin/exams/{exam['id']}/passages",
+        json={"title": "P", "body_text": "t"},
+    ).json()["passages"][0]
+    uploaded = admin_client.post(
+        f"/api/v1/admin/passages/{passage['id']}/image",
+        files={"file": ("p.png", FAKE_PNG, "image/png")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    admin_client.put(
+        f"/api/v1/admin/passages/{passage['id']}/questions",
+        json={"question_ids": [question["id"]]},
+    )
+    image_file_id = db_session.get(ExamPassage, passage["id"]).image_file_id
+
+    deleted = admin_client.delete(f"/api/v1/admin/passages/{passage['id']}")
+
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["passages"] == []
+    assert deleted.json()["questions"][0]["passage_id"] is None
+    assert db_session.get(ExamPassage, passage["id"]) is None
+    assert db_session.get(ExamQuestion, question["id"]) is not None
+    assert db_session.get(File, image_file_id) is not None
+    queued = db_session.query(PendingFileDeletion).filter_by(file_id=image_file_id).one()
+    assert queued.reason == "exam_passages.image_file_id delete"
+    assert queued.attempts == 0
+    assert queued.last_error == ""
 
 
 def test_exam_delete_cascades_passages_and_queues_image_cleanup(admin_client, db_session, fake_s3):
