@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Clock, Lock, RotateCw, Unlock } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Download, Lock, RotateCw, Unlock } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import { Input, Label, Textarea } from "@/components/ui/input";
 import { Pagination } from "@/components/ui/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAttemptDetail, useExamAttempts, useGrantExtraTime, useGrantNewAttempt, useUnlockAttempt } from "@/hooks/use-admin-attempts";
-import { ApiError } from "@/lib/api";
+import { api, ApiError, saveBlob } from "@/lib/api";
 import { formatCairo } from "@/lib/cairo-time";
 import type { AdminAttemptDetail, AdminExamDetail, AttemptStatus } from "@/lib/types";
 
@@ -28,20 +28,38 @@ export function AttemptsTab({ exam }: { exam: AdminExamDetail }) {
   const [status, setStatus] = useState<string>("");
   const [page, setPage] = useState(1);
   const [openAttemptId, setOpenAttemptId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
   const { data, isLoading, error, refetch } = useExamAttempts(exam.id, status || null, page);
+
+  async function exportResults() {
+    setExporting(true);
+    try {
+      const { blob, filename } = await api.getBlob(`/admin/exams/${exam.id}/results.xlsx`);
+      saveBlob(blob, filename || `results-${exam.id}.xlsx`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر تصدير النتائج");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div>
       <div className="flex items-center justify-between gap-3">
         <p className="text-body-sm text-text-muted">كل محاولات الطلاب في هذا الامتحان، مع إجراءات الفتح وإضافة الوقت ومنح محاولة جديدة.</p>
-        <select
-          value={status}
-          onChange={(e) => { setStatus(e.target.value); setPage(1); }}
-          className="h-10 rounded-md border border-border bg-surface px-3 text-body-sm"
-        >
-          <option value="">كل الحالات</option>
-          {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={status}
+            onChange={(e) => { setStatus(e.target.value); setPage(1); }}
+            className="h-10 rounded-md border border-border bg-surface px-3 text-body-sm"
+          >
+            <option value="">كل الحالات</option>
+            {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
+          </select>
+          <Button variant="secondary" size="sm" onClick={exportResults} loading={exporting}>
+            <Download size={14} /> تصدير النتائج
+          </Button>
+        </div>
       </div>
 
       <div className="mt-4">

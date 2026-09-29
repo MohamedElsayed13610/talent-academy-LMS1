@@ -744,3 +744,219 @@ export interface NewAttemptIn {
   reason: string;
   extra_minutes?: number;
 }
+
+// ------------------------------------------------------------------------------------- Phase 8 ----
+
+export interface CourseRankOut {
+  course_id: number;
+  course_title: string;
+  rank: number;
+  points: number;
+}
+
+export interface PointEvent {
+  id: number;
+  event_key: string;
+  source_type: string;
+  source_id: number | null;
+  description: string;
+  points: number;
+  course_id: number | null;
+  course_title: string | null;
+  created_at: string;
+}
+
+export interface MyPointsOut {
+  total: number;
+  monthly: number;
+  course_ranks: CourseRankOut[];
+  history: PointEvent[];
+  history_total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface LeaderRow {
+  rank: number;
+  student_id: number;
+  display_name: string;
+  points: number;
+  is_me: boolean;
+}
+
+export interface LeaderboardOut {
+  course_id: number;
+  course_title: string;
+  rows: LeaderRow[];
+  me: LeaderRow | null;
+}
+
+export interface AdminLeaderRow {
+  rank: number;
+  student_id: number;
+  full_name: string;
+  student_code: string | null;
+  points: number;
+}
+
+export type AccessBlockedReason = "subscription_expired" | "subscription_pending" | "subscription_suspended";
+
+export interface AttendanceSummaryOut {
+  total: number;
+  present: number;
+  absent: number;
+  late: number;
+  excused: number;
+  rate: number;
+}
+
+export interface DashboardStudentOut {
+  id: number;
+  full_name: string;
+  student_code: string | null;
+  grade_level: string | null;
+}
+
+export interface DashboardOut {
+  student: DashboardStudentOut;
+  access_blocked: { reason: AccessBlockedReason } | null;
+  courses: CourseCard[];
+  next_session: LiveSessionCard | null;
+  next_exam: StudentExamCard | null;
+  attendance: AttendanceSummaryOut;
+  points: { total: number; monthly: number };
+  course_ranks: CourseRankOut[];
+  unread_notifications: number;
+  recent_results: ExamResult[];
+}
+
+export type CalendarEventType = "live" | "exam";
+
+export interface CalendarEventOut {
+  id: string;
+  type: CalendarEventType;
+  title: string;
+  starts_at: string;
+  ends_at: string;
+  course_title: string;
+  href: string;
+}
+
+export type AnnouncementTargetType = "all" | "course" | "group";
+
+export interface AnnouncementIn {
+  title: string;
+  body?: string;
+  target_type: AnnouncementTargetType;
+  course_id?: number | null;
+  group_id?: number | null;
+  is_active?: boolean;
+}
+
+export type AnnouncementPatch = Partial<AnnouncementIn>;
+
+export interface AdminAnnouncementOut {
+  id: number;
+  title: string;
+  body: string;
+  target_type: AnnouncementTargetType;
+  course_id: number | null;
+  course_title: string | null;
+  group_id: number | null;
+  group_name: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface StudentNotificationOut {
+  id: number;
+  title: string;
+  body: string;
+  target_type: AnnouncementTargetType;
+  course_title: string | null;
+  group_name: string | null;
+  created_at: string;
+  is_read: boolean;
+}
+
+export interface StudentReportStudentOut {
+  id: number;
+  full_name: string;
+  student_code: string | null;
+  grade_level: string | null;
+  student_type: string;
+  effective_subscription: string;
+}
+
+export interface ReportAttendanceOut {
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  rate: number;
+}
+
+export interface StudentReportRow {
+  student: StudentReportStudentOut;
+  overall_progress: number;
+  courses_count: number;
+  completed_lessons: number;
+  total_lessons: number;
+  exams_taken: number;
+  exam_average: number | null;
+  attendance: ReportAttendanceOut;
+  total_points: number;
+  last_login_at: string | null;
+}
+
+export interface CourseProgressOut {
+  course_id: number;
+  course_title: string;
+  progress: number;
+  rank: number;
+  points: number;
+}
+
+export interface ExamSummaryOut {
+  exam_id: number;
+  exam_title: string;
+  best_percentage: number | null;
+  latest_percentage: number | null;
+  attempts_used: number;
+}
+
+export interface StudentReportDetail {
+  student: StudentReportStudentOut;
+  subscription: string;
+  subscription_expires_at: string | null;
+  groups: StudentGroupSummary[];
+  courses: CourseProgressOut[];
+  attendance: ReportAttendanceOut;
+  attendance_records_count: number;
+  exams: ExamSummaryOut[];
+  points_total: number;
+  points_recent: PointEvent[];
+  last_login_at: string | null;
+  admin_notes: string;
+  whatsapp_summary_text: string;
+}
+
+export type ExamResultStatus = "submitted" | "not_taken" | "locked";
+
+export interface ExamResultLatestOut {
+  percentage: number;
+  score_points: number;
+  total_points: number;
+  passed: boolean;
+  submitted_at: string | null;
+}
+
+export interface ExamResultRow {
+  student_id: number;
+  full_name: string;
+  student_code: string | null;
+  status: ExamResultStatus;
+  best: number | null;
+  latest: ExamResultLatestOut | null;
+  attempts_used: number;
+}
