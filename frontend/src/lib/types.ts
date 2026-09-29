@@ -464,8 +464,25 @@ export interface ExamQuestionOut {
   topic: string;
   difficulty: Difficulty;
   points: number;
+  passage_id: number | null;
   choices: ExamChoiceOut[];
 }
+
+export interface ExamPassageOut {
+  id: number;
+  title: string;
+  body_text: string;
+  image_url: string | null;
+  position: number;
+  question_ids: number[];
+}
+
+export interface PassageIn {
+  title?: string;
+  body_text?: string;
+}
+
+export type PassagePatch = PassageIn;
 
 export interface AdminExamDetail {
   id: number;
@@ -488,6 +505,7 @@ export interface AdminExamDetail {
   question_count: number;
   total_points: number;
   questions: ExamQuestionOut[];
+  passages: ExamPassageOut[];
 }
 
 export interface ExamDeletePreview {
@@ -532,4 +550,109 @@ export interface AnswerKeyApplyIn {
   answers: string;
   points_per_question?: number | null;
   publish?: boolean;
+}
+
+// ------------------------------------------------------------------------- student exam runner ----
+
+export type AttemptStatus = "granted" | "in_progress" | "locked" | "submitted" | "expired" | "superseded";
+export type StudentExamStatus = "upcoming" | "available" | "in_progress" | "submitted" | "expired" | "completed";
+export type ViolationType = "page_hidden" | "window_blur" | "fullscreen_exit";
+
+export interface LatestResult {
+  percentage: number;
+  score_points: number;
+  total_points: number;
+  submitted_at: string | null;
+  passed: boolean;
+}
+
+export interface StudentExamCard {
+  id: number;
+  title: string;
+  course_title: string;
+  group_name: string | null;
+  status: StudentExamStatus;
+  duration: number;
+  question_count: number;
+  total_points: number;
+  passing_score: number;
+  max_attempts: number;
+  attempts_used: number;
+  best_score: number | null;
+  latest: LatestResult | null;
+  open_attempt_status: AttemptStatus | null;
+  starts_at: string | null;
+  ends_at: string | null;
+}
+
+export interface ExamPreStartOut extends StudentExamCard {
+  exam_mode: ExamMode;
+  description: string;
+}
+
+export interface AttemptChoiceOut {
+  id: number;
+  label: ChoiceLabel;
+  text: string | null;
+}
+
+export interface AttemptQuestionOut {
+  id: number;
+  position: number;
+  type: QuestionType;
+  prompt_text: string | null;
+  image_url: string | null;
+  topic: string;
+  difficulty: Difficulty;
+  points: number;
+  passage_id: number | null;
+  choices: AttemptChoiceOut[];
+}
+
+export interface AttemptPassageOut {
+  id: number;
+  title: string;
+  body_text: string;
+  image_url: string | null;
+  position: number;
+}
+
+export interface AttemptPayload {
+  attempt_id: number;
+  status: AttemptStatus;
+  expires_at: string;
+  server_now: string;
+  violation_count: number;
+  violation_limit: number;
+  questions: AttemptQuestionOut[];
+  passages: AttemptPassageOut[];
+  saved_answers: Record<number, number | null>;
+}
+
+export interface AnswerIn {
+  question_id: number;
+  choice_id: number | null;
+}
+
+export interface AnswersUpsertOut {
+  saved: boolean;
+  server_now: string;
+  expires_at: string;
+}
+
+export interface AttemptEventOut {
+  violation_count: number;
+  locked: boolean;
+  message: string | null;
+}
+
+export interface ExamResult {
+  attempt_id: number;
+  exam_title: string;
+  score_points: number;
+  total_points: number;
+  percentage: number;
+  passed: boolean;
+  submitted_at: string | null;
+  points_awarded: number;
 }

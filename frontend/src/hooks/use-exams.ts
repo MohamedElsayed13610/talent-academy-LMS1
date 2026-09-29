@@ -11,6 +11,8 @@ import type {
   ExamIn,
   ExamPatch,
   Page,
+  PassageIn,
+  PassagePatch,
   QuestionPatch,
   TextQuestionIn,
 } from "@/lib/types";
@@ -131,6 +133,34 @@ export function useUploadQuestionImages(examId: number) {
     form.append("difficulty", difficulty);
     form.append("points", String(points));
     return api.postForm<AdminExamDetail>(`/admin/exams/${examId}/question-images`, form);
+  });
+}
+
+export function useCreatePassage(examId: number) {
+  return useExamTreeMutation(examId, (payload: PassageIn) => api.post<AdminExamDetail>(`/admin/exams/${examId}/passages`, payload));
+}
+
+export function useUpdatePassage(examId: number) {
+  return useExamTreeMutation(examId, ({ id, ...payload }: { id: number } & PassagePatch) => api.patch<AdminExamDetail>(`/admin/passages/${id}`, payload));
+}
+
+export function useReorderPassages(examId: number) {
+  return useExamTreeMutation(examId, (ids: number[]) => api.put<AdminExamDetail>(`/admin/exams/${examId}/passages/order`, { ids }));
+}
+
+export function useDeletePassage(examId: number) {
+  return useExamTreeMutation(examId, (id: number) => api.delete<AdminExamDetail>(`/admin/passages/${id}`));
+}
+
+export function useSetPassageQuestions(examId: number) {
+  return useExamTreeMutation(examId, ({ id, questionIds }: { id: number; questionIds: number[] }) => api.put<AdminExamDetail>(`/admin/passages/${id}/questions`, { question_ids: questionIds }));
+}
+
+export function useUploadPassageImage(examId: number) {
+  return useExamTreeMutation(examId, ({ id, file }: { id: number; file: File }) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api.postForm<AdminExamDetail>(`/admin/passages/${id}/image`, form);
   });
 }
 
