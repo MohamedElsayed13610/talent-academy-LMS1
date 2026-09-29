@@ -41,6 +41,7 @@ class AdminAccountOut(BaseModel):
     email: str | None
     title: str | None
     is_active: bool
+    is_primary: bool
     last_login_at: datetime | None
     created_at: datetime
 
@@ -49,12 +50,9 @@ class AdminAccountCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     email: EmailStr
     title: str | None = Field(default=None, max_length=120)
-    password: str | None = Field(default=None, min_length=8, max_length=128)
-
-
-class AdminAccountCreateResponse(BaseModel):
-    admin: AdminAccountOut
-    generated_password: str | None = None
+    # Required, chosen by the primary admin -- never auto-generated (Scope A: "Do not generate a
+    # password automatically").
+    password: str = Field(min_length=8, max_length=128)
 
 
 class AdminAccountUpdate(BaseModel):
@@ -62,6 +60,10 @@ class AdminAccountUpdate(BaseModel):
     email: EmailStr | None = None
     title: str | None = Field(default=None, max_length=120)
     is_active: bool | None = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class AuditLogRow(BaseModel):

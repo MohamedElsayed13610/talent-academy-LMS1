@@ -35,6 +35,12 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def require_primary_admin(user: User = Depends(require_admin)) -> User:
+    if not (user.admin_profile and user.admin_profile.is_primary):
+        raise ForbiddenError(code="PRIMARY_ADMIN_REQUIRED", message="هذا الإجراء متاح للأدمن الرئيسي فقط")
+    return user
+
+
 def require_student(user: User = Depends(get_current_user)) -> User:
     if user.role != UserRole.student:
         raise ForbiddenError(code="STUDENT_REQUIRED", message="هذه الصفحة للطلاب فقط")

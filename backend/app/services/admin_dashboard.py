@@ -155,7 +155,7 @@ def _warnings(db: Session, students: AdminDashboardStudentsOut, sessions: AdminD
     if pending:
         warnings.append(AdminWarning(code="subscriptions_pending", message="طلاب في انتظار مراجعة الاشتراك", count=pending, severity="warning"))
     if sessions.pending_finalization:
-        warnings.append(AdminWarning(code="sessions_pending_finalization", message="حصص انتهت ولسه محتاجة تفريغ الحضور", count=sessions.pending_finalization, severity="warning"))
+        warnings.append(AdminWarning(code="sessions_pending_finalization", message="حصص انتهت ولسه محتاجة اعتماد الحضور والغياب", count=sessions.pending_finalization, severity="warning"))
     last_backup = db.scalar(select(JobRun).where(JobRun.job_name == "backup").order_by(JobRun.started_at.desc()).limit(1))
     if last_backup is None:
         warnings.append(AdminWarning(code="backup_never_run", message="لسه مفيش نسخة احتياطية اتعملت", severity="warning"))

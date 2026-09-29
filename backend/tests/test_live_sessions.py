@@ -160,6 +160,9 @@ def test_bulk_update_and_finalize(admin_client, db_session):
     assert bulk.json()["counts"]["present"] == 1
     assert bulk.json()["counts"]["unmarked"] == 1
 
+    bulk2 = admin_client.put(f"/api/v1/admin/live-sessions/{session['id']}/attendance", json={"records": [{"student_id": s2.id, "status": "absent"}]})
+    assert bulk2.json()["counts"]["unmarked"] == 0
+
     finalized = admin_client.post(f"/api/v1/admin/live-sessions/{session['id']}/attendance/finalize")
     assert finalized.status_code == 200
     body = finalized.json()
@@ -167,6 +170,67 @@ def test_bulk_update_and_finalize(admin_client, db_session):
     assert body["counts"]["absent"] == 1
     assert body["counts"]["unmarked"] == 0
     assert body["session"]["attendance_finalized_at"] is not None
+
+
+def test_finalize_blocked_while_any_student_unmarked(admin_client, db_session):
+    """Scope C #3: no auto-marking-absent anymore -- every student needs an explicit status."""
+    course = _make_course(db_session)
+    s1 = _make_student(db_session, "TA-060032")
+    s2 = _make_student(db_session, "TA-060033")
+    db_session.add(Enrollment(user_id=s1.id, course_id=course.id))
+    db_session.add(Enrollment(user_id=s2.id, course_id=course.id))
+    db_session.commit()
+    session = _create_session(admin_client, course.id, starts_delta=timedelta(hours=1), ends_delta=timedelta(hours=2))
+
+    admin_client.put(f"/api/v1/admin/live-sessions/{session['id']}/attendance/{s1.id}", json={"status": "present"})
+    # s2 left unmarked
+    finalized = admin_client.post(f"/api/v1/admin/live-sessions/{session['id']}/attendance/finalize")
+    assert finalized.status_code == 422
+    assert finalized.json()["error"]["code"] == "ATTENDANCE_INCOMPLETE"
+
+    unfinalized = admin_client.get(f"/api/v1/admin/live-sessions/{session['id']}/attendance").json()
+    assert unfinalized["session"]["attendance_finalized_at"] is None
+
+
+def test_finalize_is_idempotent_against_repeated_clicks(admin_client, db_session):
+    course = _make_course(db_session)
+    s1 = _make_student(db_session, "TA-060034")
+    db_session.add(Enrollment(user_id=s1.id, course_id=course.id))
+    db_session.commit()
+    session = _create_session(admin_client, course.id, starts_delta=timedelta(hours=1), ends_delta=timedelta(hours=2))
+    admin_client.put(f"/api/v1/admin/live-sessions/{session['id']}/attendance/{s1.id}", json={"status": "present"})
+
+    first = admin_client.post(f"/api/v1/admin/live-sessions/{session['id']}/attendance/finalize")
+    assert first.status_code == 200
+    finalized_at = first.json()["session"]["attendance_finalized_at"]
+
+    second = admin_client.post(f"/api/v1/admin/live-sessions/{session['id']}/attendance/finalize")
+    assert second.status_code == 200
+    assert second.json()["session"]["attendance_finalized_at"] == finalized_at
+
+    audit = admin_client.get("/api/v1/admin/audit-log?action=attendance.finalize")
+    assert audit.json()["total"] == 1  # the second call didn't write a duplicate audit entry
+
+
+def test_correction_after_finalization_is_audited_distinctly(admin_client, db_session):
+    course = _make_course(db_session)
+    s1 = _make_student(db_session, "TA-060035")
+    db_session.add(Enrollment(user_id=s1.id, course_id=course.id))
+    db_session.commit()
+    session = _create_session(admin_client, course.id, starts_delta=timedelta(hours=1), ends_delta=timedelta(hours=2))
+    admin_client.put(f"/api/v1/admin/live-sessions/{session['id']}/attendance/{s1.id}", json={"status": "present"})
+    admin_client.post(f"/api/v1/admin/live-sessions/{session['id']}/attendance/finalize")
+
+    correction = admin_client.put(f"/api/v1/admin/live-sessions/{session['id']}/attendance/{s1.id}", json={"status": "late"})
+    assert correction.status_code == 200
+    assert correction.json()["students"][0]["status"] == "late"
+
+    audit = admin_client.get("/api/v1/admin/audit-log?action=attendance.correct")
+    assert audit.json()["total"] == 1
+    assert audit.json()["items"][0]["summary"]["corrected_after_finalization"] is True
+
+    pre_finalize_updates = admin_client.get("/api/v1/admin/audit-log?action=attendance.update")
+    assert pre_finalize_updates.json()["total"] == 1  # the original mark, not the correction
 
 
 def test_attendance_export_xlsx(admin_client, db_session):

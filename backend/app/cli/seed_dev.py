@@ -39,7 +39,7 @@ def main() -> int:
         )
         db.add(admin)
         db.flush()
-        db.add(AdminProfile(user_id=admin.id))
+        db.add(AdminProfile(user_id=admin.id, is_primary=True))
 
         def make_student(code: str, name: str, grade: GradeLevel, student_type: StudentType,
                           subscription_status: SubscriptionStatus, expires_in_days: int | None) -> User:

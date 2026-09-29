@@ -145,7 +145,7 @@ def admin_user(db_session):
     )
     db_session.add(admin)
     db_session.flush()
-    db_session.add(AdminProfile(user_id=admin.id))
+    db_session.add(AdminProfile(user_id=admin.id, is_primary=True))
     db_session.commit()
     return admin
 

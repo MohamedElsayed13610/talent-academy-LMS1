@@ -20,6 +20,7 @@ from app.core.security import generate_password, hash_password
 from app.models.identity import GradeLevel, StudentProfile, StudentType, SubscriptionStatus, User, UserRole
 from app.services.audit import record_audit
 from app.services.excel_style import write_report_sheet
+from app.services.students import generate_student_code
 from app.schemas.students import (
     CredentialsRow,
     ImportCommitOut,
@@ -29,9 +30,14 @@ from app.schemas.students import (
     StudentRow,
 )
 
+# Scope B import policy (documented + tested in tests/test_students.py): Student ID is optional in
+# the import file. A row that supplies one keeps it (validated for format/uniqueness like before --
+# this is the backward-compatible path for admins with existing prepared import sheets). A row that
+# leaves it blank gets one generated the same way normal creation does (student_code_seq), at
+# commit time. Preview never consumes a sequence number for a row that might not end up committed.
 COLUMNS: list[tuple[str, str, str, bool]] = [
     # (key, english label, arabic label, required)
-    ("student_code", "Student ID", "كود الطالب", True),
+    ("student_code", "Student ID (leave blank to auto-generate)", "كود الطالب (اتركه فارغًا للتوليد التلقائي)", False),
     ("full_name", "Full Name", "الاسم الكامل", True),
     ("email", "Email", "البريد الإلكتروني", False),
     ("guardian_phone", "Guardian Phone", "هاتف ولي الأمر", False),
@@ -48,7 +54,7 @@ def build_template_workbook() -> bytes:
     ws = wb.active
     ws.title = "Students"
     ws.append([f"{key}: {en} / {ar}" for key, en, ar, _ in COLUMNS])
-    ws.append(["TA-000123", "محمد أحمد", "", "", "G12", "academy", "active"])
+    ws.append(["", "محمد أحمد", "", "", "G12", "academy", "active"])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -77,7 +83,7 @@ def _parse_rows(content: bytes, filename: str) -> list[dict]:
     if not rows:
         return []
     header = [_header_key(str(cell)) for cell in rows[0]]
-    if "student_code" not in header or "full_name" not in header:
+    if "full_name" not in header:
         raise ValueError("رأس الملف غير صحيح — استخدم القالب المتاح للتحميل")
 
     data_rows = rows[1 : MAX_ROWS + 1]
@@ -97,21 +103,22 @@ def _validate_row(db: Session, academy_id: int, row_no: int, data: dict, seen_co
     errors: list[str] = []
     warnings: list[str] = []
 
-    code = (data.get("student_code") or "").strip().upper()
+    code = (data.get("student_code") or "").strip().upper() or None
     name = (data.get("full_name") or "").strip()
     email = (data.get("email") or "").strip().lower() or None
     grade = (data.get("grade_level") or "").strip().upper() or None
     student_type = (data.get("student_type") or "academy").strip().lower() or "academy"
     subscription = (data.get("subscription_status") or "active").strip().lower() or "active"
 
-    if not code:
-        errors.append("Student ID مطلوب")
-    elif code in seen_codes:
-        errors.append(f"Student ID مكرر داخل الملف: {code}")
-    elif db.scalar(select(User.id).where(User.academy_id == academy_id, func.upper(User.student_code) == code)):
-        errors.append(f"Student ID موجود بالفعل: {code}")
-    else:
-        seen_codes.add(code)
+    # Blank is valid and means "auto-generate at commit time" (Scope B import policy above) --
+    # only a *provided* code is checked for duplicates/collisions.
+    if code:
+        if code in seen_codes:
+            errors.append(f"Student ID مكرر داخل الملف: {code}")
+        elif db.scalar(select(User.id).where(User.academy_id == academy_id, func.upper(User.student_code) == code)):
+            errors.append(f"Student ID موجود بالفعل: {code}")
+        else:
+            seen_codes.add(code)
 
     if not name or len(name) < 2:
         errors.append("اسم الطالب مطلوب (حرفين على الأقل)")
@@ -166,10 +173,11 @@ def commit_import(db: Session, academy_id: int, rows: list[dict], actor: User, r
             continue
         data = validated.data
         password = generate_password()
+        code = data["student_code"] or generate_student_code(db)
         student = User(
             academy_id=academy_id, role=UserRole.student, full_name=data["full_name"],
             full_name_search=normalize_search_text(data["full_name"]), email=data["email"],
-            student_code=data["student_code"], password_hash=hash_password(password), must_change_password=True,
+            student_code=code, password_hash=hash_password(password), must_change_password=True,
         )
         db.add(student)
         db.flush()

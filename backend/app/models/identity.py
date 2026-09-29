@@ -111,6 +111,11 @@ class AdminProfile(Base, TimestampMixin):
 
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Exactly one admin per academy is primary (enforced at the app layer, not a DB constraint --
+    # the partial-unique-index approach isn't worth it for a single-tenant app with one academy
+    # row). The primary admin is the only one who can create/delete/deactivate/reset-password other
+    # admin accounts, and can never be deleted or deactivated themselves (spec: Scope A).
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped[User] = relationship(back_populates="admin_profile")
 

@@ -46,7 +46,7 @@ def main() -> int:
         )
         db.add(admin)
         db.flush()
-        db.add(AdminProfile(user_id=admin.id))
+        db.add(AdminProfile(user_id=admin.id, is_primary=True))
         db.commit()
         print(f"Created admin: {email}")
         return 0

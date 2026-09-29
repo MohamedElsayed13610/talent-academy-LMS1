@@ -9,8 +9,10 @@ from app.core.errors import UnauthorizedError, ValidationAppError
 from app.core.rate_limit import LOGIN_PER_IDENTIFIER, LOGIN_PER_IP, rate_limiter
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
-from app.models.identity import User
+from app.models.identity import User, UserRole
+from app.db.scope import get_default_academy_id
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse, MeOut
+from app.services.audit import record_audit
 from app.services.auth_service import (
     REFRESH_COOKIE,
     authenticate,
@@ -36,6 +38,7 @@ def _me_out(user: User) -> MeOut:
         grade_level=profile.grade_level.value if profile and profile.grade_level else None,
         student_type=profile.student_type.value if profile else None,
         must_change_password=user.must_change_password,
+        is_primary_admin=(user.admin_profile.is_primary if user.role == UserRole.admin and user.admin_profile else None),
     )
 
 
@@ -98,6 +101,8 @@ def change_password(
         raise ValidationAppError(code="SAME_PASSWORD", message="اختر كلمة مرور مختلفة عن الحالية")
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
+    # Never record the password value itself, only that a change happened (Scope A #8).
+    record_audit(db, academy_id=get_default_academy_id(db), actor=user, action="auth.change_password", entity_type="user", entity_id=str(user.id), request=request)
     db.commit()
     # Revoke every other device's session, then issue a fresh one for *this* device/browser so
     # changing the password doesn't immediately log the user back out of the device they're using.

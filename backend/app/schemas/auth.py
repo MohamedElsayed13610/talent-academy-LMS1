@@ -23,6 +23,7 @@ class MeOut(BaseModel):
     grade_level: str | None
     student_type: str | None
     must_change_password: bool
+    is_primary_admin: bool | None = None
 
 
 class LoginResponse(BaseModel):

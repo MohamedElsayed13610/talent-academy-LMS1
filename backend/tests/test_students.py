@@ -40,27 +40,79 @@ def test_student_role_cannot_list_students(client, db_session):
     assert response.status_code == 403
 
 
-def test_create_student_generates_password_and_rejects_duplicate_code(admin_client):
+def test_create_student_generates_password_and_sequential_code(admin_client):
+    import re
+
     response = admin_client.post("/api/v1/admin/students", json={
-        "student_code": "ta-000123", "full_name": "محمد أحمد", "grade_level": "G12", "student_type": "academy",
+        "full_name": "محمد أحمد", "grade_level": "G12", "student_type": "academy",
     })
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["generated_password"]
     assert len(body["generated_password"]) >= 8
-    assert body["student"]["student_code"] == "TA-000123"  # normalized upper-case
+    first_code = body["student"]["student_code"]
+    assert re.fullmatch(r"TA-\d{6}", first_code)
 
-    dup = admin_client.post("/api/v1/admin/students", json={"student_code": "TA-000123", "full_name": "طالب آخر"})
-    assert dup.status_code == 409
-    assert dup.json()["error"]["code"] == "STUDENT_CODE_TAKEN"
+    second = admin_client.post("/api/v1/admin/students", json={"full_name": "طالب آخر"})
+    assert second.status_code == 201
+    second_code = second.json()["student"]["student_code"]
+    # sequential and never repeats
+    assert int(second_code.split("-")[1]) == int(first_code.split("-")[1]) + 1
+
+
+def test_create_student_ignores_any_client_supplied_code(admin_client):
+    """The backend is the sole source of truth for student codes (Scope B) -- even if a client
+    tries to smuggle one in, the request schema has no such field, so it's simply not accepted."""
+    response = admin_client.post("/api/v1/admin/students", json={
+        "full_name": "محاولة تزوير", "student_code": "TA-999999",
+    })
+    assert response.status_code == 201, response.text
+    assert response.json()["student"]["student_code"] != "TA-999999"
 
 
 def test_create_student_with_explicit_password_no_generated_password(admin_client):
     response = admin_client.post("/api/v1/admin/students", json={
-        "student_code": "TA-000200", "full_name": "سارة محمود", "password": "MyOwnPassword1",
+        "full_name": "سارة محمود", "password": "MyOwnPassword1",
     })
     assert response.status_code == 201
     assert response.json()["generated_password"] is None
+
+
+def test_concurrent_student_creation_never_collides(admin_user, db_session, engine):
+    """Two overlapping creates must never receive the same student_code (Scope B #4). Each request
+    uses its own Session/transaction against the same real Postgres instance -- nextval() on
+    student_code_seq is what has to make this safe, not any app-level locking."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sqlalchemy.orm import sessionmaker
+
+    from app.services.students import generate_student_code
+
+    Session = sessionmaker(bind=engine)
+
+    def _generate() -> str:
+        with Session() as session:
+            code = generate_student_code(session)
+            session.commit()
+            return code
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(lambda _: _generate(), range(20)))
+
+    assert len(codes) == len(set(codes)) == 20
+
+
+def test_deleted_student_code_is_never_reused(admin_client, db_session):
+    create = admin_client.post("/api/v1/admin/students", json={"full_name": "طالب سيُحذف"})
+    student_id = create.json()["student"]["id"]
+    deleted_code = create.json()["student"]["student_code"]
+
+    delete = admin_client.delete(f"/api/v1/admin/students/{student_id}")
+    assert delete.status_code == 204
+
+    recreate = admin_client.post("/api/v1/admin/students", json={"full_name": "طالب جديد بعد الحذف"})
+    assert recreate.status_code == 201
+    assert recreate.json()["student"]["student_code"] != deleted_code
 
 
 def test_list_students_search_by_name_and_code(admin_client, db_session):
@@ -128,11 +180,13 @@ def test_delete_preview_and_cascade_delete(admin_client, db_session):
     delete = admin_client.delete(f"/api/v1/admin/students/{student.id}")
     assert delete.status_code == 204
 
-    # Student code is immediately reusable (spec §4) — the row and its points are really gone.
+    # The row and its points are really gone (student_code reuse is covered separately in
+    # test_deleted_student_code_is_never_reused — Scope B changed this from the old "immediately
+    # reusable" behavior).
     assert db_session.get(User, student.id) is None
     assert db_session.query(PointLedger).filter(PointLedger.user_id == student.id).count() == 0
 
-    again = admin_client.post("/api/v1/admin/students", json={"student_code": "TA-000800", "full_name": "طالب جديد"})
+    again = admin_client.post("/api/v1/admin/students", json={"full_name": "طالب جديد"})
     assert again.status_code == 201
 
 

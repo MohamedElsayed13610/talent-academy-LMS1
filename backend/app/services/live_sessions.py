@@ -14,7 +14,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError, GoneError, NotFoundError
+from app.core.errors import ConflictError, GoneError, NotFoundError, ValidationAppError
 from app.core.time import utcnow
 from app.models.courses import Course
 from app.models.groups import GroupMembership, StudentGroup
@@ -280,7 +280,15 @@ def update_one(db: Session, academy_id: int, session: LiveSession, student_id: i
     if student_id not in audience_ids(db, session.course_id, session.group_id):
         raise NotFoundError(code="STUDENT_NOT_IN_AUDIENCE", message="الطالب غير موجود في جمهور هذه الحصة")
     _apply_attendance(db, academy_id, session, student_id, status, note, actor)
-    record_audit(db, academy_id=academy_id, actor=actor, action="attendance.update", entity_type="live_session", entity_id=str(session.id), summary={"student_id": student_id, "status": status}, request=request)
+    # A change made after the session's attendance was already finalized is a correction, not the
+    # original recording -- logged under a distinct action so the audit log itself shows which is
+    # which (Scope C #7), not just via attendance_finalized_at's current value.
+    already_finalized = session.attendance_finalized_at is not None
+    action = "attendance.correct" if already_finalized else "attendance.update"
+    summary = {"student_id": student_id, "status": status}
+    if already_finalized:
+        summary["corrected_after_finalization"] = True
+    record_audit(db, academy_id=academy_id, actor=actor, action=action, entity_type="live_session", entity_id=str(session.id), summary=summary, request=request)
     db.commit()
     return attendance_sheet(db, academy_id, session)
 
@@ -291,16 +299,34 @@ def bulk_update(db: Session, academy_id: int, session: LiveSession, records: lis
         if record["student_id"] not in audience:
             continue
         _apply_attendance(db, academy_id, session, record["student_id"], record["status"], record.get("note"), actor)
-    record_audit(db, academy_id=academy_id, actor=actor, action="attendance.bulk_update", entity_type="live_session", entity_id=str(session.id), summary={"count": len(records)}, request=request)
+    already_finalized = session.attendance_finalized_at is not None
+    action = "attendance.correct" if already_finalized else "attendance.bulk_update"
+    summary = {"count": len(records)}
+    if already_finalized:
+        summary["corrected_after_finalization"] = True
+    record_audit(db, academy_id=academy_id, actor=actor, action=action, entity_type="live_session", entity_id=str(session.id), summary=summary, request=request)
     db.commit()
     return attendance_sheet(db, academy_id, session)
 
 
 def finalize(db: Session, academy_id: int, session: LiveSession, actor: User, request: Request | None) -> AttendanceSheetOut:
+    """اعتماد الحضور والغياب (Scope C): every audience member must already have an explicit status
+    -- present/absent/late/excused -- before this can run; nothing is auto-marked absent on their
+    behalf anymore. Idempotent: calling it again on an already-finalized session is a safe no-op
+    (same response, no duplicate audit entry, no timestamp churn), so a retried/double-clicked
+    request can never fail or re-trigger anything."""
+    if session.attendance_finalized_at is not None:
+        return attendance_sheet(db, academy_id, session)
+
     audience = audience_ids(db, session.course_id, session.group_id)
     marked = set(db.scalars(select(AttendanceRecord.user_id).where(AttendanceRecord.live_session_id == session.id)).all())
-    for student_id in audience - marked:
-        _apply_attendance(db, academy_id, session, student_id, "absent", None, actor)
+    unmarked_count = len(audience - marked)
+    if unmarked_count > 0:
+        raise ValidationAppError(
+            code="ATTENDANCE_INCOMPLETE",
+            message=f"لازم تحدد حالة كل الطلاب قبل اعتماد الحضور والغياب ({unmarked_count} بدون حالة)",
+        )
+
     session.attendance_finalized_at = utcnow()
     record_audit(db, academy_id=academy_id, actor=actor, action="attendance.finalize", entity_type="live_session", entity_id=str(session.id), request=request)
     db.commit()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import Request
-from sqlalchemy import String, and_, case, cast, func, or_, select
+from sqlalchemy import String, and_, case, cast, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import ConflictError, NotFoundError, ValidationAppError
@@ -228,6 +228,14 @@ def student_detail(db: Session, student: User) -> StudentDetail:
     )
 
 
+def generate_student_code(db: Session) -> str:
+    """TA-000001, TA-000002, ... via a Postgres sequence (migration 0006) -- nextval() is atomic
+    across concurrent transactions and never transactional itself, so two simultaneous creates can
+    never collide and a rolled-back or later-deleted student's number is never reused (Scope B)."""
+    n = db.scalar(text("SELECT nextval('student_code_seq')"))
+    return f"TA-{n:06d}"
+
+
 def _assert_unique_code_and_email(db: Session, academy_id: int, code: str, email: str | None, *, exclude_id: int | None = None) -> None:
     code_stmt = select(User.id).where(User.academy_id == academy_id, func.upper(User.student_code) == code.upper())
     if exclude_id:
@@ -243,11 +251,12 @@ def _assert_unique_code_and_email(db: Session, academy_id: int, code: str, email
 
 
 def create_student(db: Session, academy_id: int, payload: StudentCreate, actor: User, request: Request | None) -> tuple[User, str | None]:
-    code = payload.student_code.strip().upper()
-    if not code:
-        raise ValidationAppError(code="STUDENT_CODE_REQUIRED", message="Student ID مطلوب")
+    # The generated code is unique by construction (student_code_seq), so only email needs the
+    # pre-flight check here -- unlike update_student, which lets an admin retype a code by hand.
     email = payload.email.lower().strip() if payload.email else None
-    _assert_unique_code_and_email(db, academy_id, code, email)
+    if email and db.scalar(select(User.id).where(User.academy_id == academy_id, func.lower(User.email) == email)):
+        raise ConflictError(code="EMAIL_TAKEN", message="البريد الإلكتروني مستخدم بالفعل")
+    code = generate_student_code(db)
 
     generated: str | None = None
     password = payload.password
@@ -350,8 +359,10 @@ def delete_preview(db: Session, student: User) -> DeletePreviewOut:
 
 
 def delete_student(db: Session, academy_id: int, student: User, actor: User, request: Request | None) -> None:
-    """Relies on the DB's own ON DELETE CASCADE for every child row (ARCHITECTURE.md §3) — the
-    student code is immediately reusable, no manual cleanup needed."""
+    """Relies on the DB's own ON DELETE CASCADE for every child row (ARCHITECTURE.md §3) — no
+    manual cleanup needed. The freed student_code is never reissued (Scope B): student_code_seq
+    only ever advances, independent of this delete, so the deleted student's number stays retired
+    permanently rather than going back into circulation."""
     preview = delete_preview(db, student)
     student_code = student.student_code
     record_audit(

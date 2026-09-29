@@ -10,13 +10,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
-from app.core.security import generate_password, hash_password
+from app.core.security import hash_password
 from app.core.time import utcnow
 from app.models.academy import DEFAULT_POINT_VALUES, AcademySettings
 from app.models.audit import AuditLog, JobRun
 from app.models.identity import AdminProfile, User, UserRole
 from app.services import files as files_svc
 from app.services.audit import record_audit
+from app.services.auth_service import revoke_all_sessions
 from app.schemas.common import Page
 from app.schemas.settings import (
     AcademySettingsOut,
@@ -99,7 +100,8 @@ def to_admin_out(user: User) -> AdminAccountOut:
     return AdminAccountOut(
         id=user.id, full_name=user.full_name, email=user.email,
         title=user.admin_profile.title if user.admin_profile else None,
-        is_active=user.is_active, last_login_at=user.last_login_at, created_at=user.created_at,
+        is_active=user.is_active, is_primary=bool(user.admin_profile and user.admin_profile.is_primary),
+        last_login_at=user.last_login_at, created_at=user.created_at,
     )
 
 
@@ -116,27 +118,24 @@ def _assert_email_free(db: Session, academy_id: int, email: str, *, exclude_id: 
         raise ConflictError(code="EMAIL_TAKEN", message="البريد الإلكتروني مستخدم بالفعل")
 
 
-def create_admin(db: Session, academy_id: int, payload: AdminAccountCreate, actor: User, request: Request | None) -> tuple[User, str | None]:
+def create_admin(db: Session, academy_id: int, payload: AdminAccountCreate, actor: User, request: Request | None) -> User:
     email = payload.email.lower().strip()
     _assert_email_free(db, academy_id, email)
 
-    generated: str | None = None
-    password = payload.password
-    if not password:
-        generated = generate_password()
-        password = generated
-
+    # The primary admin chooses and enters the password directly -- never generated, never a
+    # forced-change flow (Scope A #2/#3).
     admin = User(
         academy_id=academy_id, role=UserRole.admin, full_name=payload.full_name.strip(),
-        email=email, password_hash=hash_password(password), must_change_password=True,
+        email=email, password_hash=hash_password(payload.password),
     )
     db.add(admin)
     db.flush()
     db.add(AdminProfile(user_id=admin.id, title=(payload.title or "").strip() or None))
+    # Never record the password value itself, only that one was set (Scope A #6/#8).
     record_audit(db, academy_id=academy_id, actor=actor, action="admin.create", entity_type="user", entity_id=str(admin.id), summary={"email": email}, request=request)
     db.commit()
     db.refresh(admin)
-    return admin, generated
+    return admin
 
 
 def get_admin_or_404(db: Session, academy_id: int, admin_id: int) -> User:
@@ -148,6 +147,13 @@ def get_admin_or_404(db: Session, academy_id: int, admin_id: int) -> User:
 
 def update_admin(db: Session, academy_id: int, admin: User, payload: AdminAccountUpdate, actor: User, request: Request | None) -> User:
     data = payload.model_dump(exclude_unset=True)
+    is_primary_target = bool(admin.admin_profile and admin.admin_profile.is_primary)
+    if "is_active" in data and data["is_active"] is not None:
+        if admin.id == actor.id and not data["is_active"]:
+            raise ForbiddenError(code="CANNOT_DEACTIVATE_SELF", message="لا يمكنك إيقاف حسابك الخاص")
+        if is_primary_target and not data["is_active"]:
+            raise ForbiddenError(code="CANNOT_DEACTIVATE_PRIMARY", message="لا يمكن إيقاف حساب الأدمن الرئيسي")
+
     if data.get("email"):
         email = data["email"].lower().strip()
         _assert_email_free(db, academy_id, email, exclude_id=admin.id)
@@ -158,8 +164,6 @@ def update_admin(db: Session, academy_id: int, admin: User, payload: AdminAccoun
         if admin.admin_profile:
             admin.admin_profile.title = (data["title"] or "").strip() or None
     if "is_active" in data and data["is_active"] is not None:
-        if admin.id == actor.id and not data["is_active"]:
-            raise ForbiddenError(code="CANNOT_DEACTIVATE_SELF", message="لا يمكنك إيقاف حسابك الخاص")
         admin.is_active = data["is_active"]
 
     record_audit(db, academy_id=academy_id, actor=actor, action="admin.update", entity_type="user", entity_id=str(admin.id), summary=data, request=request)
@@ -171,12 +175,23 @@ def update_admin(db: Session, academy_id: int, admin: User, payload: AdminAccoun
 def delete_admin(db: Session, academy_id: int, admin: User, actor: User, request: Request | None) -> None:
     if admin.id == actor.id:
         raise ForbiddenError(code="CANNOT_DELETE_SELF", message="لا يمكنك حذف حسابك الخاص")
+    if admin.admin_profile and admin.admin_profile.is_primary:
+        raise ForbiddenError(code="CANNOT_DELETE_PRIMARY", message="لا يمكن حذف حساب الأدمن الرئيسي")
     remaining = db.scalar(select(func.count()).where(User.academy_id == academy_id, User.role == UserRole.admin, User.id != admin.id, User.is_active.is_(True))) or 0
     if remaining == 0:
         raise ValidationAppError(code="LAST_ADMIN", message="لازم يفضل أدمن واحد نشط على الأقل")
     record_audit(db, academy_id=academy_id, actor=actor, action="admin.delete", entity_type="user", entity_id=str(admin.id), summary={"email": admin.email}, request=request)
     db.delete(admin)
     db.commit()
+
+
+def reset_admin_password(db: Session, academy_id: int, admin: User, new_password: str, actor: User, request: Request | None) -> None:
+    """The primary admin sets a specific new password for another admin -- never generated, and
+    never logged (Scope A #4/#6/#8)."""
+    admin.password_hash = hash_password(new_password)
+    record_audit(db, academy_id=academy_id, actor=actor, action="admin.reset_password", entity_type="user", entity_id=str(admin.id), request=request)
+    db.commit()
+    revoke_all_sessions(db, admin.id)
 
 
 # ----------------------------------------------------------------------------------- audit log ----
