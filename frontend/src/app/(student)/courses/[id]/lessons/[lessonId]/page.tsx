@@ -2,13 +2,28 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, Download, ExternalLink, FileText, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CheckCircle2, Download, ExternalLink, FileQuestion, FileText, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ErrorState } from "@/components/ui/error-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMyLessonDetail, useUpdateLessonProgress } from "@/hooks/use-my-courses";
 import { ApiError } from "@/lib/api";
+
+// Not found / unauthorized both render this same card, on purpose: the backend returns the same
+// 404 for "this lesson doesn't exist", "you don't have access to it", and "it belongs to a
+// different course than the one you have access to" -- never confirming which, so a student can't
+// probe for the existence of a lesson they can't see (same discipline as the exam runner).
+function LessonNotFound() {
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center gap-3 rounded-lg border border-border bg-surface-2 py-14 px-6 text-center">
+      <FileQuestion size={28} className="text-text-muted" />
+      <h2 className="text-h3">الدرس غير موجود أو غير متاح لك</h2>
+      <p className="text-body-sm text-text-muted">تأكد إنك مشترك في الكورس، أو إن الرابط صحيح.</p>
+      <Button asChild className="mt-2"><Link href="/courses">كورساتي</Link></Button>
+    </div>
+  );
+}
 
 export default function LessonPlayerPage() {
   const params = useParams<{ id: string; lessonId: string }>();
@@ -20,7 +35,14 @@ export default function LessonPlayerPage() {
   const updateProgress = useUpdateLessonProgress(lessonId, courseId);
 
   if (isLoading) return <Skeleton className="h-96 w-full" />;
-  if (error || !lesson) return <ErrorState message={error instanceof ApiError ? error.message : "تعذر تحميل الدرس"} onRetry={() => refetch()} />;
+  // The backend only ever checks access via the lesson's own real course (never trusts the URL's
+  // course id), so a mismatched course id in the URL would otherwise silently render the lesson
+  // under the wrong course's breadcrumb/back-link. Treated the same as not-found here, not a
+  // generic error, since nothing is actually broken -- the URL just doesn't describe a real place.
+  if (error instanceof ApiError && error.status !== 404) {
+    return <ErrorState message={error.message} onRetry={() => refetch()} />;
+  }
+  if (error || !lesson || lesson.course_id !== courseId) return <LessonNotFound />;
 
   async function markComplete() {
     try {
@@ -77,9 +99,9 @@ export default function LessonPlayerPage() {
             </Button>
           </div>
 
-          {lesson.materials.length > 0 ? (
-            <section className="mt-6">
-              <h3 className="text-h3">المرفقات</h3>
+          <section className="mt-6">
+            <h3 className="text-h3">المرفقات</h3>
+            {lesson.materials.length > 0 ? (
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {lesson.materials.map((m) => (
                   <a key={m.id} href={m.url ?? undefined} target="_blank" rel="noreferrer" className="flex items-center gap-3 rounded-md border border-border px-3.5 py-3 text-body-sm hover:bg-surface-2">
@@ -89,8 +111,10 @@ export default function LessonPlayerPage() {
                   </a>
                 ))}
               </div>
-            </section>
-          ) : null}
+            ) : (
+              <p className="mt-2 text-body-sm text-text-subtle">لا يوجد مرفقات لهذا الدرس بعد.</p>
+            )}
+          </section>
 
           <div className="mt-8 flex items-center justify-between border-t border-border pt-5">
             {lesson.prev_id ? (

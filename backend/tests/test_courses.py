@@ -264,6 +264,95 @@ def test_student_cannot_mark_progress_without_access(client, db_session):
     assert response.status_code == 403
 
 
+def test_lesson_detail_valid_access(admin_client, client, db_session):
+    course = _make_course(db_session)
+    section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson = admin_client.post(f"/api/v1/admin/sections/{section['id']}/lessons", json={"title": "L1", "description": "desc"}).json()["sections"][0]["lessons"][0]
+
+    student = _make_student(db_session, code="TA-050060")
+    db_session.add(Enrollment(user_id=student.id, course_id=course.id))
+    db_session.commit()
+    authed = _login_student(client, "TA-050060")
+
+    response = authed.get(f"/api/v1/me/lessons/{lesson['id']}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == lesson["id"]
+    assert body["course_id"] == course.id
+    assert body["course_title"] == course.title
+    assert body["materials"] == []
+    assert body["completed"] is False
+
+
+def test_lesson_detail_unknown_id_returns_404(client, db_session):
+    _make_student(db_session, code="TA-050061")
+    authed = _login_student(client, "TA-050061")
+    response = authed.get("/api/v1/me/lessons/999999")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
+def test_lesson_detail_rejects_unenrolled_student(admin_client, client, db_session):
+    course = _make_course(db_session)
+    section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson = admin_client.post(f"/api/v1/admin/sections/{section['id']}/lessons", json={"title": "L1"}).json()["sections"][0]["lessons"][0]
+
+    # Not enrolled in this course at all.
+    _make_student(db_session, code="TA-050062")
+    authed = _login_student(client, "TA-050062")
+    response = authed.get(f"/api/v1/me/lessons/{lesson['id']}")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
+def test_lesson_detail_rejects_cross_course_student(admin_client, client, db_session):
+    """A student enrolled in course A must not be able to view a lesson that belongs to course B,
+    even though they're a legitimately enrolled, active student -- just not of *this* course."""
+    course_a = _make_course(db_session, title="Course A")
+    course_b = _make_course(db_session, title="Course B")
+    section_b = admin_client.post(f"/api/v1/admin/courses/{course_b.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson_b = admin_client.post(f"/api/v1/admin/sections/{section_b['id']}/lessons", json={"title": "L1"}).json()["sections"][0]["lessons"][0]
+
+    student = _make_student(db_session, code="TA-050063")
+    db_session.add(Enrollment(user_id=student.id, course_id=course_a.id))  # enrolled in A, not B
+    db_session.commit()
+    authed = _login_student(client, "TA-050063")
+
+    response = authed.get(f"/api/v1/me/lessons/{lesson_b['id']}")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
+def test_lesson_detail_rejects_unpublished_course(admin_client, client, db_session):
+    course = _make_course(db_session, published=False)
+    section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson = admin_client.post(f"/api/v1/admin/sections/{section['id']}/lessons", json={"title": "L1"}).json()["sections"][0]["lessons"][0]
+
+    student = _make_student(db_session, code="TA-050064")
+    db_session.add(Enrollment(user_id=student.id, course_id=course.id))
+    db_session.commit()
+    authed = _login_student(client, "TA-050064")
+
+    response = authed.get(f"/api/v1/me/lessons/{lesson['id']}")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
+def test_lesson_detail_rejects_blocked_subscription(admin_client, client, db_session):
+    course = _make_course(db_session)
+    section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
+    lesson = admin_client.post(f"/api/v1/admin/sections/{section['id']}/lessons", json={"title": "L1"}).json()["sections"][0]["lessons"][0]
+
+    student = _make_student(db_session, code="TA-050065", student_type=StudentType.external, subscription=SubscriptionStatus.expired)
+    db_session.add(Enrollment(user_id=student.id, course_id=course.id))
+    db_session.commit()
+    authed = _login_student(client, "TA-050065")
+
+    response = authed.get(f"/api/v1/me/lessons/{lesson['id']}")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "LESSON_NOT_FOUND"
+
+
 def test_recorded_lessons_grouped_by_course(admin_client, client, db_session):
     course = _make_course(db_session)
     section = admin_client.post(f"/api/v1/admin/courses/{course.id}/sections", json={"title": "S1"}).json()["sections"][0]
