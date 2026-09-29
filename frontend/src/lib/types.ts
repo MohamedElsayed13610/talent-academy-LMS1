@@ -960,3 +960,185 @@ export interface ExamResultRow {
   latest: ExamResultLatestOut | null;
   attempts_used: number;
 }
+
+// ------------------------------------------------------------------------------------- Phase 9 ----
+
+export interface AdminDashboardStudentsOut {
+  total: number;
+  active: number;
+  inactive: number;
+  by_subscription: Record<string, number>;
+  new_this_month: number;
+}
+
+export interface AdminDashboardCoursesOut {
+  total: number;
+  published: number;
+  unpublished: number;
+}
+
+export interface AdminDashboardGroupsOut {
+  total: number;
+}
+
+export interface AdminDashboardSessionOut {
+  id: number;
+  title: string;
+  course_title: string;
+  starts_at: string;
+  ends_at: string;
+}
+
+export interface AdminDashboardSessionsOut {
+  upcoming_7d: number;
+  live_now: number;
+  pending_finalization: number;
+  next: AdminDashboardSessionOut | null;
+}
+
+export interface AdminDashboardExamsOut {
+  published: number;
+  open_now: number;
+  upcoming_7d: number;
+}
+
+export interface AdminDashboardAttendanceOut {
+  rate_30d: number;
+  records_30d: number;
+}
+
+export interface AdminActivityRow {
+  id: number;
+  actor_label: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  summary: Record<string, unknown>;
+  created_at: string;
+}
+
+export type AdminWarningSeverity = "info" | "warning" | "danger";
+
+export interface AdminWarning {
+  code: string;
+  message: string;
+  count: number | null;
+  severity: AdminWarningSeverity;
+}
+
+export interface AdminDashboardOut {
+  students: AdminDashboardStudentsOut;
+  courses: AdminDashboardCoursesOut;
+  groups: AdminDashboardGroupsOut;
+  sessions: AdminDashboardSessionsOut;
+  exams: AdminDashboardExamsOut;
+  attendance: AdminDashboardAttendanceOut;
+  total_points_awarded: number;
+  recent_activity: AdminActivityRow[];
+  warnings: AdminWarning[];
+}
+
+export interface AcademySettingsOut {
+  display_name: string;
+  logo_url: string | null;
+  primary_color: string;
+  accent_color: string;
+  whatsapp_url: string;
+  point_values: Record<string, number>;
+  late_threshold_minutes: number;
+  violation_limit: number;
+  join_open_minutes_before: number;
+  exam_submit_grace_seconds: number;
+  updated_at: string | null;
+  updated_by_name: string | null;
+}
+
+export interface AcademySettingsUpdate {
+  display_name?: string;
+  logo_file_id?: string;
+  primary_color?: string;
+  accent_color?: string;
+  whatsapp_url?: string;
+  point_values?: Record<string, number>;
+  late_threshold_minutes?: number;
+  violation_limit?: number;
+  join_open_minutes_before?: number;
+  exam_submit_grace_seconds?: number;
+}
+
+export interface AdminAccountOut {
+  id: number;
+  full_name: string;
+  email: string | null;
+  title: string | null;
+  is_active: boolean;
+  last_login_at: string | null;
+  created_at: string;
+}
+
+export interface AdminAccountCreate {
+  full_name: string;
+  email: string;
+  title?: string | null;
+  password?: string | null;
+}
+
+export interface AdminAccountCreateResponse {
+  admin: AdminAccountOut;
+  generated_password: string | null;
+}
+
+export interface AdminAccountUpdate {
+  full_name?: string;
+  email?: string;
+  title?: string | null;
+  is_active?: boolean;
+}
+
+export interface AuditLogRow {
+  id: number;
+  actor_label: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  summary: Record<string, unknown>;
+  ip: string;
+  created_at: string;
+}
+
+export interface BackupStatusOut {
+  configured: boolean;
+  last_run_at: string | null;
+  last_status: string | null;
+  last_detail: string | null;
+}
+
+export interface PeriodOut {
+  date_from: string | null;
+  date_to: string | null;
+}
+
+export interface PeriodExamOut {
+  exam_title: string;
+  percentage: number;
+  passed: boolean;
+  submitted_at: string | null;
+}
+
+export interface PeriodLessonOut {
+  lesson_title: string;
+  course_title: string;
+  completed_at: string;
+}
+
+export interface StudentPeriodReport {
+  student: StudentReportStudentOut;
+  period: PeriodOut;
+  courses: CourseProgressOut[];
+  attendance: ReportAttendanceOut;
+  exams: PeriodExamOut[];
+  points_total: number;
+  points_events: PointEvent[];
+  completed_lessons: PeriodLessonOut[];
+  admin_notes: string;
+}

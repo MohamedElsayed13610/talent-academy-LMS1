@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, Search } from "lucide-react";
+import { Download, FileText, Search } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -128,6 +128,8 @@ export default function AdminReportsPage() {
 
 function StudentReportDialog({ studentId }: { studentId: number }) {
   const { data: detail, isLoading, error } = useStudentReportDetail(studentId);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   async function exportOne() {
     try {
@@ -135,6 +137,19 @@ function StudentReportDialog({ studentId }: { studentId: number }) {
       saveBlob(blob, filename || `student-${studentId}-report.xlsx`);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : "تعذر تصدير التقرير");
+    }
+  }
+
+  async function exportPdf() {
+    try {
+      const params = new URLSearchParams();
+      if (dateFrom) params.set("date_from", dateFrom);
+      if (dateTo) params.set("date_to", dateTo);
+      const qs = params.toString();
+      const { blob, filename } = await api.getBlob(`/admin/reports/students/${studentId}.pdf${qs ? `?${qs}` : ""}`);
+      saveBlob(blob, filename || `student-${studentId}-report.pdf`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "تعذر إنشاء ملف PDF");
     }
   }
 
@@ -201,7 +216,23 @@ function StudentReportDialog({ studentId }: { studentId: number }) {
           </section>
         ) : null}
 
-        <Button variant="secondary" className="self-start" onClick={exportOne}><Download size={15} /> تصدير تقرير الطالب</Button>
+        <section className="rounded-md border border-border p-3">
+          <h4 className="text-label text-text-muted">تقرير PDF لفترة محددة</h4>
+          <div className="mt-2 flex flex-wrap items-end gap-2">
+            <div>
+              <label className="text-caption text-text-subtle" htmlFor="pdf-date-from">من</label>
+              <Input id="pdf-date-from" type="date" className="mt-1 h-9 w-40" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-caption text-text-subtle" htmlFor="pdf-date-to">إلى</label>
+              <Input id="pdf-date-to" type="date" className="mt-1 h-9 w-40" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </div>
+            <Button variant="secondary" onClick={exportPdf}><FileText size={15} /> تحميل PDF</Button>
+          </div>
+          <p className="mt-1.5 text-caption text-text-subtle">اتركها فارغة لتقرير كل الفترة.</p>
+        </section>
+
+        <Button variant="secondary" className="self-start" onClick={exportOne}><Download size={15} /> تصدير تقرير الطالب (Excel)</Button>
       </div>
     </DialogContent>
   );

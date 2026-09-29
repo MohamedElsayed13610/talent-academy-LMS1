@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { Award, BookOpen, CalendarClock, CheckCircle2, Clock, FileQuestion, MessageCircle, Trophy, Users } from "lucide-react";
+import { useState } from "react";
+import { Award, BookOpen, CalendarClock, CheckCircle2, Clock, FileQuestion, Medal, MessageCircle, Trophy, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorState } from "@/components/ui/error-state";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatTile } from "@/components/ui/stat-tile";
 import { CourseCard } from "@/components/course-card";
 import { useBranding } from "@/hooks/use-branding";
 import { useDashboard } from "@/hooks/use-dashboard";
 import { useMe } from "@/hooks/use-auth";
+import { useMyLeaderboard } from "@/hooks/use-points";
 import { ApiError } from "@/lib/api";
 import { formatCairo } from "@/lib/cairo-time";
 import type { AccessBlockedReason } from "@/lib/types";
@@ -25,6 +28,11 @@ export default function DashboardPage() {
   const { data: me } = useMe();
   const { data: branding } = useBranding();
   const { data, isLoading, error, refetch } = useDashboard();
+  const [selectedCourseId, setSelectedCourseId] = useState<number | null>(null);
+  // Defaults to the first enrolled course once the dashboard loads, without an effect: this only
+  // tracks an explicit user pick, and always derives the actual selected value from live data.
+  const leaderboardCourseId = selectedCourseId ?? data?.courses[0]?.id ?? null;
+  const { data: board, isLoading: boardLoading, error: boardError } = useMyLeaderboard(leaderboardCourseId, 10);
 
   return (
     <div>
@@ -72,7 +80,7 @@ export default function DashboardPage() {
             ) : null}
           </div>
 
-          {data.course_ranks.length > 0 ? (
+          {data.course_ranks.length === 0 ? null : (
             <div className="mt-6 rounded-lg border border-border bg-surface p-5">
               <h3 className="text-h3">ترتيبك في الكورسات</h3>
               <div className="mt-3 flex flex-col gap-2">
@@ -86,6 +94,56 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {data.courses.length > 0 ? (
+            <div className="mt-6 rounded-lg border border-border bg-surface p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-h3">زملاؤك في الكورس</h3>
+                <div className="w-full sm:w-56">
+                  <Select value={leaderboardCourseId ? String(leaderboardCourseId) : undefined} onValueChange={(v) => setSelectedCourseId(Number(v))}>
+                    <SelectTrigger><SelectValue placeholder="اختر كورس" /></SelectTrigger>
+                    <SelectContent>
+                      {data.courses.map((c) => <SelectItem key={c.id} value={String(c.id)}>{c.title}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {boardError ? (
+                <ErrorState message={boardError instanceof ApiError ? boardError.message : "تعذر تحميل ترتيب الكورس"} />
+              ) : boardLoading ? (
+                <Skeleton className="h-48 w-full" />
+              ) : !board || board.rows.length === 0 ? (
+                <EmptyState icon={Medal} title="لا يوجد طلاب بعد" description="ترتيب الزملاء في هذا الكورس هيظهر لما يبدأوا كسب نقاط." />
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-border">
+                  {board.rows.map((row) => (
+                    <div
+                      key={row.student_id}
+                      className={`flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 text-body-sm last:border-b-0 ${row.is_me ? "bg-primary-soft" : ""}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`flex size-7 items-center justify-center rounded-full text-caption font-bold ${row.rank <= 3 ? "bg-accent-soft text-accent-fg" : "bg-surface-2 text-text-muted"}`}>
+                          {row.rank}
+                        </span>
+                        <span className={row.is_me ? "font-semibold" : ""}>{row.display_name}{row.is_me ? " (أنت)" : ""}</span>
+                      </div>
+                      <Badge tone={row.is_me ? "primary" : "neutral"}>{row.points} نقطة</Badge>
+                    </div>
+                  ))}
+                  {board.me && !board.rows.some((r) => r.is_me) ? (
+                    <div className="flex items-center justify-between gap-3 border-t-2 border-primary bg-primary-soft px-4 py-2.5 text-body-sm">
+                      <div className="flex items-center gap-3">
+                        <span className="flex size-7 items-center justify-center rounded-full bg-surface-2 text-caption font-bold text-text-muted">{board.me.rank}</span>
+                        <span className="font-semibold">{board.me.display_name} (أنت)</span>
+                      </div>
+                      <Badge tone="primary">{board.me.points} نقطة</Badge>
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : null}
 
