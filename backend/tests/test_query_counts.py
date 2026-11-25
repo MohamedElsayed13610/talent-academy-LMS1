@@ -11,6 +11,7 @@ from sqlalchemy import event
 
 from tests.test_live_sessions import _create_session
 from tests.test_student_exams import (
+    FAKE_PNG,
     _add_text_question,
     _create_exam_via_api,
     _enroll,
@@ -115,3 +116,38 @@ def test_student_exam_list_and_dashboard_query_count_does_not_grow_with_exams(ad
     assert [statuses[f"Exam {i}"] for i in range(8)] == ["completed"] * 4 + ["available"] * 3 + ["in_progress"]
     assert small[0] == big[0], (small[0], big[0])
     assert small[1] == big[1], (small[1], big[1])
+
+
+def _image_exam(admin_client, course_id, n_images):
+    """A published exam of n image questions plus one passage with an image."""
+    exam = _create_exam_via_api(admin_client, course_id, title=f"Images x{n_images}")
+    files = [("files", (f"q{i}.png", FAKE_PNG, "image/png")) for i in range(n_images)]
+    assert admin_client.post(f"/api/v1/admin/exams/{exam['id']}/question-images", files=files).status_code == 201
+    passage = admin_client.post(f"/api/v1/admin/exams/{exam['id']}/passages", json={"title": "P", "body_text": "t"}).json()["passages"][0]
+    assert admin_client.post(f"/api/v1/admin/passages/{passage['id']}/image", files={"file": ("p.png", FAKE_PNG, "image/png")}).status_code == 201
+    assert admin_client.post(f"/api/v1/admin/exams/{exam['id']}/answer-key", json={"answers": "A" * n_images}).status_code == 200
+    return exam
+
+
+def test_opening_an_attempt_does_not_query_once_per_image(admin_client, client, db_session, engine, fake_s3):
+    course = _make_course(db_session)
+    small = _image_exam(admin_client, course.id, 2)
+    big = _image_exam(admin_client, course.id, 8)
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+
+    counts = []
+    for exam in (small, big):
+        attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+        # A real request starts with an empty session; drop the File rows the uploads above left
+        # in this shared test session, or db.get() would be served from memory and hide the N+1.
+        db_session.expunge_all()
+        with count_queries(engine) as statements:
+            payload = student_client.get(f"/api/v1/me/attempts/{attempt_id}")
+        assert payload.status_code == 200
+        urls = [q["image_url"] for q in payload.json()["questions"]] + [p["image_url"] for p in payload.json()["passages"]]
+        assert all(urls) and len(set(urls)) == len(urls)
+        counts.append(len(statements))
+    print(f"\n[query-count] GET /me/attempts/{{id}}: 2 images+1 passage image={counts[0]}, 8 images+1 passage image={counts[1]}")
+    assert counts[0] == counts[1], counts

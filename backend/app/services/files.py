@@ -6,8 +6,10 @@ module ever needs to remember to clean up a file itself.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -44,6 +46,16 @@ def get_file_or_404(db: Session, academy_id: int, file_id: str) -> File:
     if not row or row.academy_id != academy_id:
         raise NotFoundError(code="FILE_NOT_FOUND", message="الملف غير موجود")
     return row
+
+
+def signed_urls(db: Session, file_ids: Iterable[str | None], *, expires_in: int = 300) -> dict[str, str]:
+    """Presigned GET URLs for many files with a single query for their rows (file_id -> URL).
+    Ids that are None or have no row are simply absent from the result."""
+    ids = {file_id for file_id in file_ids if file_id}
+    if not ids:
+        return {}
+    rows = db.scalars(select(File).where(File.id.in_(ids))).all()
+    return {row.id: storage_r2.presigned_get_url(row.bucket, row.storage_key, expires_in=expires_in) for row in rows}
 
 
 def signed_url(db: Session, file_id: str, *, expires_in: int = 300) -> tuple[str, datetime] | None:

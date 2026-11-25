@@ -207,16 +207,19 @@ def _attempt_payload(db: Session, attempt: ExamAttempt) -> AttemptPayload:
     settings_row = db.get(AcademySettings, exam.academy_id)
     violation_limit = settings_row.violation_limit if settings_row else 2
     grace_seconds = settings_row.exam_submit_grace_seconds if settings_row else 0
-    sign_seconds = _image_sign_seconds(attempt, grace_seconds)
+    passages = sorted(exam.passages, key=lambda p: p.position)
+    # Every question and passage image signed from one query for all their file rows, instead of
+    # one db.get() per image.
+    image_urls = files_svc.signed_urls(
+        db, [q.image_file_id for q in questions] + [p.image_file_id for p in passages],
+        expires_in=_image_sign_seconds(attempt, grace_seconds),
+    )
 
     out_questions = []
     for q in questions:
-        image_url = None
-        if q.image_file_id:
-            signed = files_svc.signed_url(db, q.image_file_id, expires_in=sign_seconds)
-            image_url = signed[0] if signed else None
         out_questions.append(AttemptQuestionOut(
-            id=q.id, position=q.position, type=q.question_type.value, prompt_text=q.prompt_text or None, image_url=image_url,
+            id=q.id, position=q.position, type=q.question_type.value, prompt_text=q.prompt_text or None,
+            image_url=image_urls.get(q.image_file_id) if q.image_file_id else None,
             topic=q.topic, difficulty=q.difficulty.value, points=q.points, passage_id=q.passage_id,
             # Never include is_correct or which choice is correct — choices carry only id/label/text.
             choices=[AttemptChoiceOut(id=c.id, label=c.label.value, text=c.text or None) for c in sorted(q.choices, key=lambda c: c.label.value)],
@@ -226,13 +229,13 @@ def _attempt_payload(db: Session, attempt: ExamAttempt) -> AttemptPayload:
     # is only called for an attempt the caller already owns and that passed _assert_writable/get_
     # attempt_or_404 upstream -- same access discipline as the questions above (spec: "passage
     # content only returned after a valid active attempt").
-    out_passages = []
-    for p in sorted(exam.passages, key=lambda p: p.position):
-        image_url = None
-        if p.image_file_id:
-            signed = files_svc.signed_url(db, p.image_file_id, expires_in=sign_seconds)
-            image_url = signed[0] if signed else None
-        out_passages.append(AttemptPassageOut(id=p.id, title=p.title, body_text=p.body_text, image_url=image_url, position=p.position))
+    out_passages = [
+        AttemptPassageOut(
+            id=p.id, title=p.title, body_text=p.body_text, position=p.position,
+            image_url=image_urls.get(p.image_file_id) if p.image_file_id else None,
+        )
+        for p in passages
+    ]
 
     return AttemptPayload(
         attempt_id=attempt.id, status=attempt.status.value, expires_at=attempt.expires_at, server_now=utcnow(),
