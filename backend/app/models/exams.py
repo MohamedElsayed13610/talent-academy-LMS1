@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -200,7 +200,7 @@ class ExamAnswer(Base):
     attempt_id: Mapped[int] = mapped_column(ForeignKey("exam_attempts.id", ondelete="CASCADE"), index=True)
     question_id: Mapped[int] = mapped_column(ForeignKey("exam_questions.id", ondelete="CASCADE"), index=True)
     choice_id: Mapped[int | None] = mapped_column(ForeignKey("exam_choices.id", ondelete="SET NULL"), nullable=True)
-    client_seq: Mapped[int] = mapped_column(Integer, default=0)
+    client_seq: Mapped[int] = mapped_column(BigInteger, default=0)
     is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
     awarded_points: Mapped[int] = mapped_column(Integer, default=0)
     answered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="now()", onupdate="now()")

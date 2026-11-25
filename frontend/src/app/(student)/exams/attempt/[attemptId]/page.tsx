@@ -137,9 +137,15 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
   const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [remainingMs, setRemainingMs] = useState(() => new Date(initial.expires_at).getTime() - new Date(initial.server_now).getTime());
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  // A retry in flight must not hide an unresolved "not saved" warning; only a success clears it.
+  const markSaving = useCallback(() => setSaveStatus((prev) => (prev === "error" ? "error" : "saving")), []);
 
   const answersRef = useRef(answers);
-  const clientSeqRef = useRef(0);
+  // Continue numbering above what the server already stored: after a page refresh, restarting at
+  // 0 would make the server ignore every save (and the final submit's answers) as stale.
+  const clientSeqRef = useRef(initial.last_client_seq ?? 0);
+  const lastSavedSeqRef = useRef(initial.last_client_seq ?? 0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmittedRef = useRef(false);
   const serverOffsetRef = useRef(0);
@@ -157,6 +163,24 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
   }, []);
 
   const active = !locked && !closedStatus && !result;
+
+  // Warm the browser's image cache with every question/passage image up front, so moving between
+  // questions never waits on a fetch. Holding the elements keeps them in the in-memory cache.
+  const preloadedImagesRef = useRef<HTMLImageElement[]>([]);
+  useEffect(() => {
+    const urls = new Set<string>();
+    for (const q of initial.questions) if (q.image_url) urls.add(q.image_url);
+    for (const p of initial.passages) if (p.image_url) urls.add(p.image_url);
+    preloadedImagesRef.current = [...urls].map((url) => {
+      const img = new window.Image(); // `Image` here is next/image
+      img.decoding = "async";
+      img.src = url;
+      return img;
+    });
+    return () => {
+      preloadedImagesRef.current = [];
+    };
+  }, [initial]);
 
   // ------------------------------------------------------------------------------- submit ----
 
@@ -198,19 +222,29 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   const flushAutosave = useCallback(async () => {
     const seq = clientSeqRef.current;
+    markSaving();
     try {
       const res = await autosave.mutateAsync({ clientSeq: seq, answers: toAnswerList(answersRef.current) });
       expiresAtMsRef.current = new Date(res.expires_at).getTime();
+      if (res.saved) lastSavedSeqRef.current = Math.max(lastSavedSeqRef.current, seq);
+      // saved=false for a seq already stored is just the 20s safety-net re-sending the same batch.
+      // saved=false for a *newer* seq means the server kept someone else's answers, not ours.
+      if (lastSavedSeqRef.current >= clientSeqRef.current) setSaveStatus("saved");
+      else if (!res.saved && seq > lastSavedSeqRef.current) setSaveStatus("error");
+      // otherwise newer changes are already queued, and their own flush reports the outcome
     } catch (err) {
       if (err instanceof ApiError && err.status === 423) setLocked(true);
       else if (err instanceof ApiError && err.code === "ATTEMPT_EXPIRED") setClosedStatus("expired");
       else if (err instanceof ApiError && err.code === "ATTEMPT_NOT_ACTIVE") setClosedStatus("submitted");
+      // A late failure for a batch that a newer save already superseded doesn't matter.
+      else if (seq > lastSavedSeqRef.current) setSaveStatus("error");
     }
-  }, [autosave]);
+  }, [autosave, markSaving]);
 
   function setAnswer(questionId: number, choiceId: number) {
     if (!active) return;
     setAnswers((prev) => ({ ...prev, [questionId]: prev[questionId] === choiceId ? null : choiceId }));
+    markSaving();
     clientSeqRef.current += 1;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(flushAutosave, 900);
@@ -315,7 +349,7 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
           {violationCount > 0 ? (
             <Badge tone="warning"><AlertTriangle size={12} /> {violationCount}/{initial.violation_limit} مخالفة</Badge>
           ) : null}
-          {autosave.isPending ? <span className="text-caption text-text-subtle">جارٍ الحفظ...</span> : null}
+          <SaveIndicator status={saveStatus} />
           <Badge tone={urgent ? "danger" : "primary"}>
             <Clock size={13} /> {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
           </Badge>
@@ -393,6 +427,26 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
       {violationModal ? <ViolationModal info={violationModal} onClose={() => setViolationModal(null)} /> : null}
     </div>
+  );
+}
+
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+// Autosave state in the sticky header. A failed save stays visible (it never auto-hides) until a
+// later save succeeds; the 20s safety-net autosave keeps retrying in the background.
+function SaveIndicator({ status }: { status: SaveStatus }) {
+  return (
+    <span aria-live="polite" className="contents">
+      {status === "saving" ? <span className="text-caption text-text-subtle">جارٍ الحفظ...</span> : null}
+      {status === "saved" ? <span className="text-caption text-success-fg">تم الحفظ ✓</span> : null}
+      {status === "error" ? (
+        <Badge tone="danger">
+          <span title="تعذّر حفظ إجاباتك على الخادم. سنعيد المحاولة تلقائيًا — لا تغلق الصفحة." className="flex items-center gap-1">
+            <AlertTriangle size={12} /> لم يتم الحفظ
+          </span>
+        </Badge>
+      ) : null}
+    </span>
   );
 }
 

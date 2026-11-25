@@ -81,6 +81,9 @@ class AttemptPayload(BaseModel):
     questions: list[AttemptQuestionOut]
     passages: list[AttemptPassageOut]
     saved_answers: dict[int, int | None]
+    # Highest client_seq the server has stored for this attempt. A resumed client (page refresh)
+    # must continue numbering above it, or every save it sends is ignored as stale.
+    last_client_seq: int
 
 
 class AnswerIn(BaseModel):
@@ -88,8 +91,12 @@ class AnswerIn(BaseModel):
     choice_id: int | None = None
 
 
+# exam_answers.client_seq is a Postgres bigint.
+CLIENT_SEQ_MAX = 2**63 - 1
+
+
 class AnswersUpsertIn(BaseModel):
-    client_seq: int = Field(ge=0)
+    client_seq: int = Field(ge=0, le=CLIENT_SEQ_MAX)
     answers: list[AnswerIn] = Field(default_factory=list, max_length=500)
 
 
@@ -111,7 +118,7 @@ class AttemptEventOut(BaseModel):
 
 
 class SubmitIn(BaseModel):
-    client_seq: int = Field(ge=0)
+    client_seq: int = Field(ge=0, le=CLIENT_SEQ_MAX)
     answers: list[AnswerIn] = Field(default_factory=list, max_length=500)
 
 
