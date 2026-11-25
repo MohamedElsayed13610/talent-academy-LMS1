@@ -9,6 +9,8 @@ from datetime import timedelta
 
 from fastapi import Request
 from sqlalchemy import func, select
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -29,13 +31,12 @@ from app.models.exams import (
     SubmitSource,
 )
 from app.models.groups import StudentGroup
-from app.models.identity import StudentProfile, User
+from app.models.identity import User, UserRole
 from app.models.points import PointSource
 from app.services import files as files_svc
 from app.services import points as points_svc
-from app.services.access import accessible_course_ids, subscription_allows_access
+from app.services.access import StudentAccess, load_student_access
 from app.services.audit import record_audit
-from app.services.live_sessions import audience_ids
 from app.schemas.student_exams import (
     AnswerIn,
     AttemptChoiceOut,
@@ -63,18 +64,26 @@ _OPEN_STATUSES = (AttemptStatus.granted, AttemptStatus.in_progress, AttemptStatu
 
 # ------------------------------------------------------------------------------- eligibility ----
 
-def _is_eligible(db: Session, user: User, exam: Exam) -> bool:
-    if not exam.is_published:
+def _eligible(user: User, exam: Exam, access: StudentAccess) -> bool:
+    """Pure check against already-loaded access facts -- no queries, so listing N exams costs the
+    same as listing one."""
+    if not exam.is_published or not access.subscription_ok:
         return False
-    profile = db.get(StudentProfile, user.id)
-    if not subscription_allows_access(user, profile):
-        return False
-    course_ids = accessible_course_ids(db, user.id)
-    if exam.course_id not in course_ids:
+    if exam.course_id not in access.course_ids:
         return False
     if exam.group_id:
-        return user.id in audience_ids(db, exam.course_id, exam.group_id)
+        # Same rule as live_sessions.audience_ids(course, group) -- the course roster (an active
+        # student with a profile, a live grant and an allowed subscription) narrowed to the group's
+        # members -- evaluated for this one student instead of building the whole roster.
+        return (
+            access.profile is not None and user.is_active and user.role == UserRole.student
+            and exam.group_id in access.group_ids
+        )
     return True
+
+
+def _is_eligible(db: Session, user: User, exam: Exam) -> bool:
+    return _eligible(user, exam, load_student_access(db, user))
 
 
 def _settings(db: Session, academy_id: int) -> AcademySettings:
@@ -112,44 +121,66 @@ def _attempts_used(db: Session, exam_id: int, user_id: int) -> int:
     ) or 0
 
 
-def _best_and_latest(db: Session, exam_id: int, user_id: int) -> tuple[int | None, LatestResult | None]:
-    rows = db.scalars(
-        select(ExamAttempt).where(ExamAttempt.exam_id == exam_id, ExamAttempt.user_id == user_id, ExamAttempt.status.in_(_TERMINAL_NON_SUPERSEDED))
-        .order_by(ExamAttempt.created_at.desc())
-    ).all()
-    if not rows:
-        return None, None
-    best = max(r.percentage for r in rows)
-    latest = rows[0]
-    return best, LatestResult(percentage=latest.percentage, score_points=latest.score_points, total_points=latest.total_points, submitted_at=latest.submitted_at, passed=latest.passed)
+def _cards(db: Session, user: User, exams: list[Exam], course_titles: dict[int, str], group_names: dict[int, str]) -> list[StudentExamCard]:
+    """Cards for many exams with a fixed number of queries: attempts and questions are aggregated
+    per exam with GROUP BY (plus one DISTINCT ON for each exam's latest finished attempt) instead
+    of five queries per exam."""
+    if not exams:
+        return []
+    exam_ids = [e.id for e in exams]
+    mine = (ExamAttempt.user_id == user.id, ExamAttempt.exam_id.in_(exam_ids))
+    finished = ExamAttempt.status.in_(_TERMINAL_NON_SUPERSEDED)
 
+    open_status = dict(db.execute(select(ExamAttempt.exam_id, ExamAttempt.status).where(*mine, ExamAttempt.status.in_(_OPEN_STATUSES))).all())
+    used_and_best = {
+        exam_id: (used, best) for exam_id, used, best in db.execute(
+            select(ExamAttempt.exam_id, func.count(), func.max(ExamAttempt.percentage)).where(*mine, finished).group_by(ExamAttempt.exam_id)
+        ).all()
+    }
+    latest = {
+        a.exam_id: a for a in db.scalars(
+            select(ExamAttempt).where(*mine, finished)
+            .order_by(ExamAttempt.exam_id, ExamAttempt.created_at.desc(), ExamAttempt.id.desc()).distinct(ExamAttempt.exam_id)
+        ).all()
+    }
+    question_stats = {
+        exam_id: (count, total) for exam_id, count, total in db.execute(
+            select(ExamQuestion.exam_id, func.count(), func.coalesce(func.sum(ExamQuestion.points), 0))
+            .where(ExamQuestion.exam_id.in_(exam_ids)).group_by(ExamQuestion.exam_id)
+        ).all()
+    }
 
-def _card(db: Session, user: User, exam: Exam, course_title: str, group_name: str | None) -> StudentExamCard:
     now = utcnow()
-    open_attempt = db.scalar(select(ExamAttempt).where(ExamAttempt.exam_id == exam.id, ExamAttempt.user_id == user.id, ExamAttempt.status.in_(_OPEN_STATUSES)))
-    attempts_used = _attempts_used(db, exam.id, user.id)
-    best, latest = _best_and_latest(db, exam.id, user.id)
-    question_count = db.scalar(select(func.count()).where(ExamQuestion.exam_id == exam.id).select_from(ExamQuestion)) or 0
-    total_points = db.scalar(select(func.coalesce(func.sum(ExamQuestion.points), 0)).where(ExamQuestion.exam_id == exam.id)) or 0
-    return StudentExamCard(
-        id=exam.id, title=exam.title, course_title=course_title, group_name=group_name,
-        status=_student_status(now, exam, open_attempt.status.value if open_attempt else None, attempts_used),
-        duration=exam.duration_minutes, question_count=question_count, total_points=int(total_points),
-        passing_score=exam.passing_score, max_attempts=exam.max_attempts, attempts_used=attempts_used,
-        best_score=best, latest=latest, open_attempt_status=open_attempt.status.value if open_attempt else None,
-        starts_at=exam.starts_at, ends_at=exam.ends_at,
-    )
+    cards: list[StudentExamCard] = []
+    for exam in exams:
+        status = open_status.get(exam.id)
+        attempts_used, best = used_and_best.get(exam.id, (0, None))
+        last = latest.get(exam.id)
+        question_count, total_points = question_stats.get(exam.id, (0, 0))
+        cards.append(StudentExamCard(
+            id=exam.id, title=exam.title, course_title=course_titles.get(exam.course_id, ""),
+            group_name=group_names.get(exam.group_id) if exam.group_id else None,
+            status=_student_status(now, exam, status.value if status else None, attempts_used),
+            duration=exam.duration_minutes, question_count=question_count, total_points=int(total_points),
+            passing_score=exam.passing_score, max_attempts=exam.max_attempts, attempts_used=attempts_used,
+            best_score=best,
+            latest=LatestResult(percentage=last.percentage, score_points=last.score_points, total_points=last.total_points, submitted_at=last.submitted_at, passed=last.passed) if last else None,
+            open_attempt_status=status.value if status else None,
+            starts_at=exam.starts_at, ends_at=exam.ends_at,
+        ))
+    return cards
 
 
-def list_my_exams(db: Session, academy_id: int, user: User) -> list[StudentExamCard]:
+def list_my_exams(db: Session, academy_id: int, user: User, access: StudentAccess | None = None) -> list[StudentExamCard]:
+    access = access or load_student_access(db, user)
     exams = db.scalars(select(Exam).where(Exam.academy_id == academy_id, Exam.is_published.is_(True))).all()
-    eligible = [e for e in exams if _is_eligible(db, user, e)]
+    eligible = [e for e in exams if _eligible(user, e, access)]
     if not eligible:
         return []
     course_titles = dict(db.execute(select(Course.id, Course.title).where(Course.id.in_({e.course_id for e in eligible}))).all())
     group_ids = {e.group_id for e in eligible if e.group_id}
     group_names = dict(db.execute(select(StudentGroup.id, StudentGroup.name).where(StudentGroup.id.in_(group_ids))).all()) if group_ids else {}
-    return [_card(db, user, e, course_titles.get(e.course_id, ""), group_names.get(e.group_id) if e.group_id else None) for e in eligible]
+    return _cards(db, user, eligible, course_titles, group_names)
 
 
 def get_pre_start(db: Session, academy_id: int, user: User, exam_id: int) -> ExamPreStartOut:
@@ -158,7 +189,7 @@ def get_pre_start(db: Session, academy_id: int, user: User, exam_id: int) -> Exa
         raise NotFoundError(code="EXAM_NOT_FOUND", message="الامتحان غير موجود أو غير متاح لك")
     course = db.get(Course, exam.course_id)
     group = db.get(StudentGroup, exam.group_id) if exam.group_id else None
-    card = _card(db, user, exam, course.title if course else "", group.name if group else None)
+    card = _cards(db, user, [exam], {exam.course_id: course.title} if course else {}, {group.id: group.name} if group else {})[0]
     return ExamPreStartOut(**card.model_dump(), exam_mode=exam.exam_mode.value, description=exam.description)
 
 
@@ -323,27 +354,60 @@ def _assert_writable(db: Session, academy_id: int, attempt: ExamAttempt) -> None
 
 def _apply_answers(db: Session, attempt: ExamAttempt, client_seq: int, answers: list[AnswerIn]) -> bool:
     """Returns True if applied, False if this batch was stale and ignored (§4.4: "a save older
-    than the stored one is ignored, so a slow network can't overwrite newer answers")."""
+    than the stored one is ignored, so a slow network can't overwrite newer answers").
+
+    Constant query count whatever the batch size: one MAX(client_seq), one query for the exam's
+    whole question -> choice map, and one INSERT ... ON CONFLICT upsert for every valid answer."""
     current_max = db.scalar(select(func.max(ExamAnswer.client_seq)).where(ExamAnswer.attempt_id == attempt.id)) or 0
     if client_seq <= current_max and current_max > 0:
         return False
-    question_ids = set(db.scalars(select(ExamQuestion.id).where(ExamQuestion.exam_id == attempt.exam_id)))
+
+    # Outer join: a question with no choices still accepts a cleared (null) answer.
     valid_choice_ids: dict[int, set[int]] = {}
+    for question_id, choice_id in db.execute(
+        select(ExamQuestion.id, ExamChoice.id)
+        .outerjoin(ExamChoice, ExamChoice.question_id == ExamQuestion.id)
+        .where(ExamQuestion.exam_id == attempt.exam_id)
+    ):
+        choices = valid_choice_ids.setdefault(question_id, set())
+        if choice_id is not None:
+            choices.add(choice_id)
+
+    # Keyed by question: if a batch repeats a question the last entry wins, as it did before --
+    # and ON CONFLICT DO UPDATE can't touch the same row twice in one statement anyway.
+    rows: dict[int, int | None] = {}
     for answer in answers:
-        if answer.question_id not in question_ids:
+        if answer.question_id not in valid_choice_ids:
             continue
-        if answer.choice_id is not None:
-            if answer.question_id not in valid_choice_ids:
-                valid_choice_ids[answer.question_id] = set(db.scalars(select(ExamChoice.id).where(ExamChoice.question_id == answer.question_id)))
-            if answer.choice_id not in valid_choice_ids[answer.question_id]:
-                continue
-        row = db.scalar(select(ExamAnswer).where(ExamAnswer.attempt_id == attempt.id, ExamAnswer.question_id == answer.question_id))
-        if not row:
-            row = ExamAnswer(attempt_id=attempt.id, question_id=answer.question_id)
-            db.add(row)
-        row.choice_id = answer.choice_id
-        row.client_seq = client_seq
+        if answer.choice_id is not None and answer.choice_id not in valid_choice_ids[answer.question_id]:
+            continue
+        rows[answer.question_id] = answer.choice_id
+    if not rows:
+        return True
+
+    table = ExamAnswer.__table__
+    stmt = pg_insert(table).values([
+        {"attempt_id": attempt.id, "question_id": question_id, "choice_id": choice_id,
+         "client_seq": client_seq, "is_correct": False, "awarded_points": 0}
+        for question_id, choice_id in rows.items()
+    ])
+    db.execute(stmt.on_conflict_do_update(
+        index_elements=[table.c.attempt_id, table.c.question_id],
+        set_={"choice_id": stmt.excluded.choice_id, "client_seq": stmt.excluded.client_seq, "answered_at": func.now()},
+    ))
+    _forget_loaded_answers(db, attempt)
     return True
+
+
+def _forget_loaded_answers(db: Session, attempt: ExamAttempt) -> None:
+    """The upsert above bypasses the ORM, so any of this attempt's ExamAnswer rows (or its
+    `answers` collection) already loaded into this session are now stale -- expire them so the
+    next read (e.g. grade_attempt right after submit's upsert) goes back to the database."""
+    for obj in list(db.identity_map.values()):
+        if isinstance(obj, ExamAnswer) and sa_inspect(obj).dict.get("attempt_id") == attempt.id:
+            db.expire(obj)
+    if "answers" in sa_inspect(attempt).dict:
+        db.expire(attempt, ["answers"])
 
 
 def autosave(db: Session, academy_id: int, user: User, attempt_id: int, client_seq: int, answers: list[AnswerIn]):

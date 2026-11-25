@@ -15,7 +15,7 @@ from app.models.courses import Course
 from app.models.groups import GroupMembership, StudentGroup
 from app.models.identity import User
 from app.models.notifications import Announcement, AnnouncementRead, AnnouncementTarget
-from app.services.access import accessible_course_ids
+from app.services.access import StudentAccess, accessible_course_ids
 from app.services.audit import record_audit
 from app.schemas.announcements import AdminAnnouncementOut, AnnouncementIn, AnnouncementPatch, StudentNotificationOut
 from app.schemas.common import Page
@@ -106,9 +106,12 @@ def delete_announcement(db: Session, academy_id: int, row: Announcement, actor: 
 
 # ------------------------------------------------------------------------------------ student ----
 
-def visible_announcement_ids(db: Session, academy_id: int, user: User) -> set[int]:
-    course_ids = accessible_course_ids(db, user.id)
-    group_ids = set(db.scalars(select(GroupMembership.group_id).where(GroupMembership.user_id == user.id)).all())
+def visible_announcement_ids(db: Session, academy_id: int, user: User, access: StudentAccess | None = None) -> set[int]:
+    if access is None:
+        course_ids = accessible_course_ids(db, user.id)
+        group_ids = set(db.scalars(select(GroupMembership.group_id).where(GroupMembership.user_id == user.id)).all())
+    else:
+        course_ids, group_ids = set(access.course_ids), set(access.group_ids)
     stmt = select(Announcement.id).where(
         Announcement.academy_id == academy_id, Announcement.is_active.is_(True),
         or_(

@@ -220,37 +220,69 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   // ------------------------------------------------------------------------------------ autosave ----
 
+  // Answers changed since the server last acknowledged them (question id -> latest choice). Each
+  // autosave sends only these, not the whole sheet. An entry is dropped only once a save carrying
+  // that exact value succeeds, so a failed save is simply folded into the next one, and every
+  // newer save is a superset of any older one still in flight.
+  const pendingRef = useRef(new Map<number, number | null>());
+  const flushRef = useRef<() => void>(() => {});
+
   const flushAutosave = useCallback(async () => {
+    const pending = pendingRef.current;
+    if (pending.size === 0) return; // nothing changed since the last acknowledged save
+    const batch = new Map(pending);
+    // A fresh seq per request (not per click): a retry of an unacknowledged batch must never look
+    // to the server like a stale duplicate of itself.
+    clientSeqRef.current += 1;
     const seq = clientSeqRef.current;
     markSaving();
     try {
-      const res = await autosave.mutateAsync({ clientSeq: seq, answers: toAnswerList(answersRef.current) });
+      const res = await autosave.mutateAsync({ clientSeq: seq, answers: [...batch].map(([question_id, choice_id]) => ({ question_id, choice_id })) });
       expiresAtMsRef.current = new Date(res.expires_at).getTime();
-      if (res.saved) lastSavedSeqRef.current = Math.max(lastSavedSeqRef.current, seq);
-      // saved=false for a seq already stored is just the 20s safety-net re-sending the same batch.
-      // saved=false for a *newer* seq means the server kept someone else's answers, not ours.
-      if (lastSavedSeqRef.current >= clientSeqRef.current) setSaveStatus("saved");
-      else if (!res.saved && seq > lastSavedSeqRef.current) setSaveStatus("error");
-      // otherwise newer changes are already queued, and their own flush reports the outcome
+      // A newer save already succeeded and carried everything this one did -- nothing to update.
+      if (seq < lastSavedSeqRef.current) return;
+      if (!res.saved) {
+        // Even a fresh seq wasn't newer than the server's: another tab/device has saved past us.
+        setSaveStatus("error");
+        return;
+      }
+      lastSavedSeqRef.current = seq;
+      for (const [questionId, choiceId] of batch) {
+        if (pending.get(questionId) === choiceId) pending.delete(questionId);
+      }
+      if (pending.size === 0) setSaveStatus("saved");
+      // otherwise newer changes are queued behind this save, and their own flush reports the outcome
     } catch (err) {
       if (err instanceof ApiError && err.status === 423) setLocked(true);
       else if (err instanceof ApiError && err.code === "ATTEMPT_EXPIRED") setClosedStatus("expired");
       else if (err instanceof ApiError && err.code === "ATTEMPT_NOT_ACTIVE") setClosedStatus("submitted");
-      // A late failure for a batch that a newer save already superseded doesn't matter.
-      else if (seq > lastSavedSeqRef.current) setSaveStatus("error");
+      else if (seq < lastSavedSeqRef.current) return; // superseded by a newer successful save
+      else if (err instanceof ApiError && err.status === 429) {
+        // Over the server's per-attempt autosave rate: not a failure -- the answers are still
+        // pending, so just try again shortly.
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => flushRef.current(), 1200);
+      } else setSaveStatus("error");
     }
   }, [autosave, markSaving]);
 
+  useEffect(() => {
+    flushRef.current = flushAutosave;
+  }, [flushAutosave]);
+
   function setAnswer(questionId: number, choiceId: number) {
     if (!active) return;
-    setAnswers((prev) => ({ ...prev, [questionId]: prev[questionId] === choiceId ? null : choiceId }));
+    const next = answersRef.current[questionId] === choiceId ? null : choiceId;
+    answersRef.current = { ...answersRef.current, [questionId]: next };
+    setAnswers(answersRef.current);
+    pendingRef.current.set(questionId, next);
     markSaving();
-    clientSeqRef.current += 1;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(flushAutosave, 900);
   }
 
-  // Safety-net autosave every 20s in case the debounced save above never fired.
+  // Safety-net autosave every 20s in case the debounced save above never fired or failed. It's a
+  // no-op (no request at all) while nothing is pending.
   useEffect(() => {
     if (!active) return;
     const interval = setInterval(flushAutosave, 20_000);

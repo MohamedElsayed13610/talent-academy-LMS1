@@ -19,7 +19,7 @@ from app.models.identity import StudentProfile, User, UserRole
 from app.models.points import PointLedger, PointSource
 from app.schemas.common import Page
 from app.schemas.points import AdminLeaderRow, CourseRankOut, LeaderboardOut, LeaderRow, MyPointsOut, PointEvent
-from app.services.access import accessible_course_ids
+from app.services.access import StudentAccess, accessible_course_ids
 
 
 def point_value(db: Session, academy_id: int, key: str) -> int:
@@ -118,8 +118,8 @@ def course_rank_for(db: Session, course_id: int, user_id: int) -> tuple[int, int
     return next(((rank, points) for sid, points, rank in ranked if sid == user_id), None)
 
 
-def course_ranks_for_student(db: Session, user: User) -> list[CourseRankOut]:
-    course_ids = accessible_course_ids(db, user.id)
+def course_ranks_for_student(db: Session, user: User, access: StudentAccess | None = None) -> list[CourseRankOut]:
+    course_ids = access.course_ids if access is not None else accessible_course_ids(db, user.id)
     if not course_ids:
         return []
     titles = dict(db.execute(select(Course.id, Course.title).where(Course.id.in_(course_ids))).all())

@@ -7,7 +7,9 @@ speaks the same S3 API, so this code is identical in dev and production.
 
 from __future__ import annotations
 
+import threading
 import uuid
+from typing import Any
 
 import boto3
 from botocore.client import Config as BotoConfig
@@ -47,17 +49,41 @@ def sniff_content_type(content: bytes) -> str | None:
     return None
 
 
+# One boto3 client per (endpoint, credentials, region). Building a client is expensive (it loads the
+# service model and sets up an HTTP connection pool) and used to happen on every call -- once per
+# presigned image URL, i.e. 100+ times for a single image-heavy exam payload. Clients are
+# thread-safe once built; creation itself goes through boto3's non-thread-safe default session,
+# hence the lock. Credentials are part of the key so the backup client (BACKUP_R2_*) never shares
+# a client with the live-files bucket, even when both point at the same endpoint.
+_clients: dict[tuple[str | None, str | None, str | None, str | None], Any] = {}
+_clients_lock = threading.Lock()
+
+
 def _client(endpoint_url: str | None = None, access_key_id: str | None = None, secret_access_key: str | None = None, region: str | None = None):
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint_url or settings.r2_endpoint_url,
-        aws_access_key_id=access_key_id or settings.r2_access_key_id,
-        aws_secret_access_key=secret_access_key or settings.r2_secret_access_key,
-        region_name=region or settings.r2_region,
-        # Path-style URLs work with both Cloudflare R2 and local MinIO and avoid generating a
-        # browser-unresolvable host such as talent-files.localhost in development.
-        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+    key = (
+        endpoint_url or settings.r2_endpoint_url,
+        access_key_id or settings.r2_access_key_id,
+        secret_access_key or settings.r2_secret_access_key,
+        region or settings.r2_region,
     )
+    client = _clients.get(key)
+    if client is not None:
+        return client
+    with _clients_lock:
+        client = _clients.get(key)
+        if client is None:
+            client = boto3.client(
+                "s3",
+                endpoint_url=key[0],
+                aws_access_key_id=key[1],
+                aws_secret_access_key=key[2],
+                region_name=key[3],
+                # Path-style URLs work with both Cloudflare R2 and local MinIO and avoid generating a
+                # browser-unresolvable host such as talent-files.localhost in development.
+                config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
+            )
+            _clients[key] = client
+    return client
 
 
 def backup_client():

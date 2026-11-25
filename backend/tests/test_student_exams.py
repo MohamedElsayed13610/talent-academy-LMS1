@@ -2,6 +2,7 @@
 start/resume idempotency, autosave staleness/rejection rules, manual + auto-submit grading and
 point-award idempotency, violation locking, and student isolation."""
 
+import time
 from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
@@ -177,7 +178,7 @@ def test_get_exam_pre_start_never_reveals_questions(admin_client, client, db_ses
 
 # ------------------------------------------------------------------------------------ autosave ----
 
-def test_autosave_replaces_answer_and_rejects_stale_client_seq(admin_client, client, db_session):
+def test_autosave_replaces_answer_and_rejects_stale_client_seq(admin_client, client, db_session, unthrottled_autosave):
     course = _make_course(db_session)
     exam = _create_exam_via_api(admin_client, course.id)
     question = _add_text_question(admin_client, exam["id"])
@@ -366,7 +367,7 @@ def _pick(question, label):
     return {"question_id": question["id"], "choice_id": next(c["id"] for c in question["choices"] if c["label"] == label)}
 
 
-def test_resumed_attempt_returns_last_client_seq_so_saves_after_refresh_count(admin_client, client, db_session):
+def test_resumed_attempt_returns_last_client_seq_so_saves_after_refresh_count(admin_client, client, db_session, unthrottled_autosave):
     course = _make_course(db_session)
     exam = _create_exam_via_api(admin_client, course.id)
     q1 = _add_text_question(admin_client, exam["id"], correct="A")
@@ -459,3 +460,117 @@ def test_question_and_passage_image_urls_outlive_the_attempt(admin_client, clien
     for url in urls:
         signed_for = int(parse_qs(urlparse(url).query)["expires"][0])  # tests/fake_s3.py echoes ExpiresIn
         assert expected - 5 <= signed_for <= expected, (url, expected)
+
+
+# ------------------------------------------------------------- autosave upsert + throttle (perf) ----
+
+def test_autosave_upsert_validates_and_last_entry_wins(admin_client, client, db_session):
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    q1 = _add_text_question(admin_client, exam["id"], correct="A")
+    q2 = _add_text_question(admin_client, exam["id"], correct="B")
+    _publish(admin_client, exam["id"])
+    other_exam = _create_exam_via_api(admin_client, course.id, title="Other")
+    foreign = _add_text_question(admin_client, other_exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+    url = f"/api/v1/me/attempts/{attempt_id}/answers"
+
+    first = student_client.put(url, json={"client_seq": 1, "answers": [
+        _pick(q1, "B"), _pick(q1, "A"),                              # repeated question: last entry wins
+        {"question_id": q2["id"], "choice_id": _pick(q1, "C")["choice_id"]},  # another question's choice: ignored
+        _pick(foreign, "A"),                                         # question from another exam: ignored
+    ]})
+    assert first.status_code == 200, first.text
+    saved = student_client.get(f"/api/v1/me/attempts/{attempt_id}").json()["saved_answers"]
+    assert saved == {str(q1["id"]): _pick(q1, "A")["choice_id"]}
+
+    # Only the changed answer is sent; the earlier one is kept, and null clears an answer.
+    second = student_client.put(url, json={"client_seq": 2, "answers": [_pick(q2, "B")]})
+    assert second.json()["saved"] is True
+    time.sleep(1.05)  # stay under AUTOSAVE_PER_ATTEMPT (2/s)
+    cleared = student_client.put(url, json={"client_seq": 3, "answers": [{"question_id": q1["id"], "choice_id": None}]})
+    assert cleared.json()["saved"] is True
+    saved = student_client.get(f"/api/v1/me/attempts/{attempt_id}").json()
+    assert saved["saved_answers"] == {str(q1["id"]): None, str(q2["id"]): _pick(q2, "B")["choice_id"]}
+    assert saved["last_client_seq"] == 3
+
+
+def test_submit_grades_the_latest_autosaved_answers(admin_client, client, db_session):
+    # The upsert bypasses the ORM; answers already loaded into the session must not be graded stale.
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    question = _add_text_question(admin_client, exam["id"], correct="B")
+    _publish(admin_client, exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+    url = f"/api/v1/me/attempts/{attempt_id}/answers"
+
+    student_client.put(url, json={"client_seq": 1, "answers": [_pick(question, "A")]})  # wrong
+    student_client.get(f"/api/v1/me/attempts/{attempt_id}")  # loads the answer row into the session
+    student_client.put(url, json={"client_seq": 2, "answers": [_pick(question, "B")]})  # corrected
+
+    submit = student_client.post(f"/api/v1/me/attempts/{attempt_id}/submit", json={"client_seq": 3, "answers": []})
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["score_points"] == 1
+
+
+def test_autosave_is_rate_limited_per_attempt(admin_client, client, db_session):
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    question = _add_text_question(admin_client, exam["id"])
+    _publish(admin_client, exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+    url = f"/api/v1/me/attempts/{attempt_id}/answers"
+
+    assert student_client.put(url, json={"client_seq": 1, "answers": [_pick(question, "A")]}).status_code == 200
+    assert student_client.put(url, json={"client_seq": 2, "answers": [_pick(question, "B")]}).status_code == 200
+    throttled = student_client.put(url, json={"client_seq": 3, "answers": [_pick(question, "C")]})
+    assert throttled.status_code == 429
+    assert throttled.json()["error"]["code"] == "RATE_LIMITED"
+
+    # Submit is never throttled, and still carries the final answers.
+    submit = student_client.post(f"/api/v1/me/attempts/{attempt_id}/submit", json={"client_seq": 4, "answers": [_pick(question, "A")]})
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["score_points"] == 1
+
+
+# ------------------------------------------------------------------ group-targeted eligibility ----
+
+def test_group_exam_is_only_visible_to_group_members(admin_client, client, db_session):
+    course = _make_course(db_session)
+    member = _make_student(db_session, code="TA-090011")
+    outsider = _make_student(db_session, code="TA-090012")
+    _enroll(db_session, member, course)
+    _enroll(db_session, outsider, course)
+    group = admin_client.post("/api/v1/admin/groups", json={"name": "Saturday group"}).json()
+    added = admin_client.post(f"/api/v1/admin/groups/{group['id']}/members", json={"student_ids": [member.id]})
+    assert added.status_code in (200, 201), added.text
+
+    open_exam = _create_exam_via_api(admin_client, course.id, title="Everyone")
+    _add_text_question(admin_client, open_exam["id"])
+    _publish(admin_client, open_exam["id"])
+    group_exam = _create_exam_via_api(admin_client, course.id, title="Group only", group_id=group["id"])
+    _add_text_question(admin_client, group_exam["id"])
+    _publish(admin_client, group_exam["id"])
+
+    member_client = _login_student(client, member.student_code)
+    cards = {c["id"]: c for c in member_client.get("/api/v1/me/exams").json()}
+    assert set(cards) == {open_exam["id"], group_exam["id"]}
+    assert cards[group_exam["id"]]["group_name"] == "Saturday group"
+    assert member_client.get(f"/api/v1/me/exams/{group_exam['id']}").status_code == 200
+
+    outsider_client = _login_student(client, outsider.student_code)
+    assert {c["id"] for c in outsider_client.get("/api/v1/me/exams").json()} == {open_exam["id"]}
+    assert outsider_client.get(f"/api/v1/me/exams/{group_exam['id']}").status_code == 404
+    assert outsider_client.post(f"/api/v1/me/exams/{group_exam['id']}/start").status_code == 404

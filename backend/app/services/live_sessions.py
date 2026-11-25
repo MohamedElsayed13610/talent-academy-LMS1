@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import Request
 from openpyxl import Workbook
@@ -35,6 +36,9 @@ from app.schemas.live import (
     LiveSessionPatch,
     MyAttendance,
 )
+
+if TYPE_CHECKING:
+    from app.services.access import StudentAccess
 
 
 # ------------------------------------------------------------------------------- audience ----
@@ -358,23 +362,29 @@ def export_attendance_xlsx(sheet: AttendanceSheetOut, *, academy_name: str = "Ta
 
 # --------------------------------------------------------------------------------- student ----
 
-def list_my_sessions(db: Session, academy_id: int, user: User, status_filter: str | None) -> list[LiveSessionCard]:
-    from app.services.access import accessible_course_ids, subscription_allows_access
-    from app.models.identity import StudentProfile
+def list_my_sessions(db: Session, academy_id: int, user: User, status_filter: str | None, access: StudentAccess | None = None) -> list[LiveSessionCard]:
+    from app.services.access import load_student_access
 
-    profile = db.get(StudentProfile, user.id)
-    if not subscription_allows_access(user, profile):
-        return []
-    course_ids = accessible_course_ids(db, user.id)
-    if not course_ids:
+    access = access or load_student_access(db, user)
+    if not access.subscription_ok or not access.course_ids:
         return []
 
-    my_group_ids = set(db.scalars(select(GroupMembership.group_id).where(GroupMembership.user_id == user.id)).all())
     stmt = select(LiveSession).where(
-        LiveSession.academy_id == academy_id, LiveSession.course_id.in_(course_ids), LiveSession.is_active.is_(True),
-        or_(LiveSession.group_id.is_(None), LiveSession.group_id.in_(my_group_ids)),
+        LiveSession.academy_id == academy_id, LiveSession.course_id.in_(access.course_ids), LiveSession.is_active.is_(True),
+        or_(LiveSession.group_id.is_(None), LiveSession.group_id.in_(access.group_ids)),
     )
     sessions = db.scalars(stmt.order_by(LiveSession.starts_at.asc())).all()
+    if not sessions:
+        return []
+
+    # One query each for course titles and this student's attendance rows, not one per session.
+    course_titles = dict(db.execute(select(Course.id, Course.title).where(Course.id.in_({s.course_id for s in sessions}))).all())
+    attendance = {
+        r.live_session_id: r for r in db.scalars(
+            select(AttendanceRecord).where(AttendanceRecord.user_id == user.id, AttendanceRecord.live_session_id.in_([s.id for s in sessions]))
+        ).all()
+    }
+    join_open_minutes = _join_open_minutes(db, academy_id)
 
     now = utcnow()
     out: list[LiveSessionCard] = []
@@ -382,13 +392,11 @@ def list_my_sessions(db: Session, academy_id: int, user: User, status_filter: st
         window = _status_window(now, s.starts_at, s.ends_at)
         if status_filter and status_filter != window:
             continue
-        course = db.get(Course, s.course_id)
-        join_open_minutes = _join_open_minutes(db, academy_id)
         join_opens_at = s.starts_at - timedelta(minutes=join_open_minutes)
         can_join = window in ("upcoming", "live") and now >= join_opens_at and now <= s.ends_at
-        row = db.scalar(select(AttendanceRecord).where(AttendanceRecord.live_session_id == s.id, AttendanceRecord.user_id == user.id))
+        row = attendance.get(s.id)
         out.append(LiveSessionCard(
-            id=s.id, title=s.title, course_id=s.course_id, course_title=course.title if course else "",
+            id=s.id, title=s.title, course_id=s.course_id, course_title=course_titles.get(s.course_id, ""),
             provider=s.provider, starts_at=s.starts_at, ends_at=s.ends_at, recording_url=s.recording_url if window == "ended" else None,
             can_join=can_join, join_opens_at=join_opens_at,
             my_attendance=MyAttendance(status=row.status.value if row else "unmarked", joined_at=row.joined_at if row else None),
