@@ -10,6 +10,7 @@ Cookies:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request, Response
@@ -35,6 +36,22 @@ REFRESH_COOKIE_PATH = f"{settings.api_prefix}/auth"
 
 MAX_FAILED_LOGINS = 10
 LOCKOUT_MINUTES = 15
+
+# Two tabs whose access tokens expire together both POST /auth/refresh with the same refresh
+# cookie; whichever lands second presents a token the first one *just* rotated. Within this window
+# that is treated as a concurrent refresh, not token theft, so the family is not revoked.
+REFRESH_REUSE_GRACE_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class RotatedSession:
+    user: User
+    access_token: str
+    # None means a grace-window reuse: no new refresh token is minted, and the browser keeps the
+    # refresh cookie the winning (first) refresh already set.
+    refresh_token: str | None
+    csrf_token: str
+    remember: bool
 
 
 def find_user_by_identifier(db: Session, identifier: str) -> User | None:
@@ -97,13 +114,41 @@ def issue_session(db: Session, user: User, request: Request, remember: bool) -> 
     return access, raw_refresh, csrf
 
 
-def rotate_session(db: Session, raw_refresh: str, request: Request) -> tuple[User, str, str, str] | None:
-    """Verifies + rotates a refresh token. Reuse of an already-rotated token revokes the family."""
+def _grace_reuse(db: Session, session: AuthSession) -> RotatedSession | None:
+    """A token rotated less than REFRESH_REUSE_GRACE_SECONDS ago gets a fresh access token for the
+    family's current (successor) session. It never mints another refresh token, so a stolen token
+    replayed inside the window still can't extend the session past the next access-token expiry."""
+    if session.rotated_at is None or utcnow() - session.rotated_at > timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS):
+        return None
+    successor = db.scalar(
+        select(AuthSession)
+        .where(AuthSession.family_id == session.family_id, AuthSession.revoked_at.is_(None))
+        .order_by(AuthSession.created_at.desc())
+    )
+    if not successor or successor.expires_at < utcnow():
+        return None
+    user = db.get(User, successor.user_id)
+    if not user or not user.is_active:
+        return None
+    successor.last_used_at = utcnow()
+    db.commit()
+    access = create_access_token(str(user.id), user.role.value, successor.id)
+    return RotatedSession(user, access, None, new_csrf_token(), successor.remember)
+
+
+def rotate_session(db: Session, raw_refresh: str, request: Request) -> RotatedSession | None:
+    """Verifies + rotates a refresh token. Reuse of an already-rotated token revokes the family,
+    except within the short concurrent-refresh grace window (see _grace_reuse)."""
     token_hash = hash_refresh_token(raw_refresh)
-    session = db.scalar(select(AuthSession).where(AuthSession.refresh_token_hash == token_hash))
+    # FOR UPDATE: two concurrent refreshes with the same token serialize here, so the second one
+    # sees the first one's rotation (and takes the grace path) instead of both rotating it.
+    session = db.scalar(select(AuthSession).where(AuthSession.refresh_token_hash == token_hash).with_for_update())
     if not session:
         return None
     if session.revoked_at is not None:
+        reused = _grace_reuse(db, session)
+        if reused:
+            return reused
         # Reuse of a revoked/rotated token → revoke the whole family (possible token theft).
         for row in db.scalars(select(AuthSession).where(AuthSession.family_id == session.family_id)).all():
             row.revoked_at = utcnow()
@@ -136,7 +181,7 @@ def rotate_session(db: Session, raw_refresh: str, request: Request) -> tuple[Use
 
     access = create_access_token(str(user.id), user.role.value, new_session.id)
     csrf = new_csrf_token()
-    return user, access, new_raw_refresh, csrf
+    return RotatedSession(user, access, new_raw_refresh, csrf, new_session.remember)
 
 
 def revoke_session_by_refresh(db: Session, raw_refresh: str) -> None:
@@ -155,7 +200,7 @@ def revoke_all_sessions(db: Session, user_id: int) -> None:
     db.commit()
 
 
-def set_auth_cookies(response: Response, access: str, refresh: str, csrf: str, remember: bool) -> None:
+def set_auth_cookies(response: Response, access: str, refresh: str | None, csrf: str, remember: bool) -> None:
     secure = settings.is_production
     response.set_cookie(
         ACCESS_COOKIE, access, max_age=settings.access_token_expire_minutes * 60,
@@ -163,11 +208,13 @@ def set_auth_cookies(response: Response, access: str, refresh: str, csrf: str, r
     )
     # "remember" off → no max_age, so the cookie is a browser-session cookie (A10). The refresh
     # token itself still expires server-side per _refresh_lifetime() regardless of this cookie.
-    response.set_cookie(
-        REFRESH_COOKIE, refresh,
-        max_age=settings.student_refresh_token_days * 24 * 3600 if remember else None,
-        httponly=True, secure=secure, samesite="lax", path=REFRESH_COOKIE_PATH,
-    )
+    # refresh=None (grace-window reuse) leaves the browser's current refresh cookie untouched.
+    if refresh is not None:
+        response.set_cookie(
+            REFRESH_COOKIE, refresh,
+            max_age=settings.student_refresh_token_days * 24 * 3600 if remember else None,
+            httponly=True, secure=secure, samesite="lax", path=REFRESH_COOKIE_PATH,
+        )
     response.set_cookie(
         CSRF_COOKIE, csrf, max_age=settings.student_refresh_token_days * 24 * 3600,
         httponly=False, secure=secure, samesite="lax", path="/",

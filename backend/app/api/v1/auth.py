@@ -67,10 +67,10 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     if not result:
         clear_auth_cookies(response)
         raise UnauthorizedError(code="SESSION_EXPIRED", message="انتهت الجلسة، سجل الدخول من جديد")
-    user, access, new_refresh, csrf = result
-    remember = True  # a rotated session already had a persistent cookie if "remember" was on
-    set_auth_cookies(response, access, new_refresh, csrf, remember)
-    return LoginResponse(user=_me_out(user), must_change_password=user.must_change_password)
+    # The session row's own `remember` flag (copied forward on every rotation from the original
+    # login) decides whether the refresh cookie stays a browser-session cookie.
+    set_auth_cookies(response, result.access_token, result.refresh_token, result.csrf_token, result.remember)
+    return LoginResponse(user=_me_out(result.user), must_change_password=result.user.must_change_password)
 
 
 @router.post("/logout", status_code=204)

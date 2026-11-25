@@ -3,12 +3,14 @@ start/resume idempotency, autosave staleness/rejection rules, manual + auto-subm
 point-award idempotency, violation locking, and student isolation."""
 
 from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
 
 from app.core.search import normalize_search_text
 from app.core.security import hash_password
 from app.core.time import utcnow
 from app.db.scope import get_default_academy_id
 from app.jobs.auto_submit import _run as run_auto_submit
+from app.models.academy import AcademySettings
 from app.models.courses import Course, CourseAccent
 from app.models.exams import AttemptStatus, ExamAttempt
 from app.models.groups import Enrollment
@@ -356,3 +358,104 @@ def test_student_cannot_start_second_open_attempt_via_double_click(admin_client,
     r2 = student_client.post(f"/api/v1/me/exams/{exam['id']}/start")
     assert r1.json()["attempt_id"] == r2.json()["attempt_id"]
     assert db_session.query(ExamAttempt).filter(ExamAttempt.exam_id == exam["id"]).count() == 1
+
+
+# ------------------------------------------------------------ resume after page refresh (Bug 2) ----
+
+def _pick(question, label):
+    return {"question_id": question["id"], "choice_id": next(c["id"] for c in question["choices"] if c["label"] == label)}
+
+
+def test_resumed_attempt_returns_last_client_seq_so_saves_after_refresh_count(admin_client, client, db_session):
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    q1 = _add_text_question(admin_client, exam["id"], correct="A")
+    q2 = _add_text_question(admin_client, exam["id"], correct="B")
+    q3 = _add_text_question(admin_client, exam["id"], correct="C")
+    _publish(admin_client, exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    started = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()
+    attempt_id = started["attempt_id"]
+    assert started["last_client_seq"] == 0
+    answers_url = f"/api/v1/me/attempts/{attempt_id}/answers"
+
+    # Before the page refresh, the runner had counted up to seq 5.
+    before = student_client.put(answers_url, json={"client_seq": 5, "answers": [_pick(q1, "A")]})
+    assert before.status_code == 200 and before.json()["saved"] is True
+
+    # Page refresh: the runner reloads the attempt and learns where numbering left off.
+    resumed = student_client.get(f"/api/v1/me/attempts/{attempt_id}").json()
+    assert resumed["last_client_seq"] == 5
+    assert resumed["saved_answers"][str(q1["id"])] == _pick(q1, "A")["choice_id"]
+
+    # Restarting at 1 (the old behaviour) is dropped as stale -- this is exactly the lost-answers bug.
+    restarted = student_client.put(answers_url, json={"client_seq": 1, "answers": [_pick(q1, "A"), _pick(q2, "B")]})
+    assert restarted.json()["saved"] is False
+
+    # Continuing from the returned value is accepted by both autosave and submit.
+    seq = resumed["last_client_seq"]
+    after = student_client.put(answers_url, json={"client_seq": seq + 1, "answers": [_pick(q1, "A"), _pick(q2, "B")]})
+    assert after.json()["saved"] is True
+    submit = student_client.post(
+        f"/api/v1/me/attempts/{attempt_id}/submit",
+        json={"client_seq": seq + 2, "answers": [_pick(q1, "A"), _pick(q2, "B"), _pick(q3, "C")]},
+    )
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["score_points"] == 3
+    assert submit.json()["total_points"] == 3
+
+
+def test_client_seq_is_stored_as_bigint(admin_client, client, db_session):
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id)
+    question = _add_text_question(admin_client, exam["id"])
+    _publish(admin_client, exam["id"])
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    attempt_id = student_client.post(f"/api/v1/me/exams/{exam['id']}/start").json()["attempt_id"]
+    answers_url = f"/api/v1/me/attempts/{attempt_id}/answers"
+
+    big = 2**40  # well past a 32-bit integer column's limit
+    saved = student_client.put(answers_url, json={"client_seq": big, "answers": [_pick(question, "A")]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["saved"] is True
+    assert student_client.get(f"/api/v1/me/attempts/{attempt_id}").json()["last_client_seq"] == big
+
+    too_big = student_client.put(answers_url, json={"client_seq": 2**63, "answers": []})
+    assert too_big.status_code == 422
+
+
+# ------------------------------------------------------------- image URL lifetime (Bug 3) ----
+
+def test_question_and_passage_image_urls_outlive_the_attempt(admin_client, client, db_session, fake_s3):
+    course = _make_course(db_session)
+    exam = _create_exam_via_api(admin_client, course.id, duration_minutes=120)
+    upload = admin_client.post(
+        f"/api/v1/admin/exams/{exam['id']}/question-images", files=[("files", ("q1.png", FAKE_PNG, "image/png"))],
+    )
+    assert upload.status_code == 201, upload.text
+    passage = admin_client.post(f"/api/v1/admin/exams/{exam['id']}/passages", json={"title": "P", "body_text": "t"}).json()["passages"][0]
+    passage_image = admin_client.post(f"/api/v1/admin/passages/{passage['id']}/image", files={"file": ("p.png", FAKE_PNG, "image/png")})
+    assert passage_image.status_code == 201, passage_image.text
+    applied = admin_client.post(f"/api/v1/admin/exams/{exam['id']}/answer-key", json={"answers": "A"})  # also publishes
+    assert applied.status_code == 200, applied.text
+
+    student = _make_student(db_session)
+    _enroll(db_session, student, course)
+    student_client = _login_student(client, student.student_code)
+    started = student_client.post(f"/api/v1/me/exams/{exam['id']}/start")
+    assert started.status_code == 200, started.text
+    payload = started.json()
+
+    grace = db_session.get(AcademySettings, get_default_academy_id(db_session)).exam_submit_grace_seconds
+    expected = 120 * 60 + grace + 5 * 60  # attempt length + submit grace + 5-minute margin
+    urls = [q["image_url"] for q in payload["questions"]] + [p["image_url"] for p in payload["passages"]]
+    assert len(urls) == 2 and all(urls)
+    for url in urls:
+        signed_for = int(parse_qs(urlparse(url).query)["expires"][0])  # tests/fake_s3.py echoes ExpiresIn
+        assert expected - 5 <= signed_for <= expected, (url, expected)

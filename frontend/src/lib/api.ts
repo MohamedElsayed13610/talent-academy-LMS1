@@ -45,16 +45,77 @@ async function toApiError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, err?.code || "UNKNOWN_ERROR", err?.message || "حدث خطأ غير متوقع", err?.details || {});
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const method = (options.method || "GET").toUpperCase();
+// ------------------------------------------------------------------------- session refresh ----
+//
+// The access-token cookie lives ACCESS_TOKEN_EXPIRE_MINUTES (15 min); the refresh-token cookie
+// (Path=/api/v1/auth) lives much longer. On a 401 we rotate once via POST /auth/refresh and retry.
+// Single-flight: every request that 401s while a refresh is in flight awaits that same refresh.
+
+type RefreshOutcome = "ok" | "rejected" | "unavailable";
+
+// Endpoints whose 401 means "wrong credentials / no session", not "access token expired".
+const NO_REFRESH_PATHS = new Set(["/auth/login", "/auth/refresh", "/auth/logout"]);
+
+let refreshInFlight: Promise<RefreshOutcome> | null = null;
+let lastRefreshAt = 0;
+
+function refreshSession(): Promise<RefreshOutcome> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async (): Promise<RefreshOutcome> => {
+      try {
+        const response = await fetch(`${API_URL}/auth/refresh`, { method: "POST", headers: withCsrf("POST", new Headers()) });
+        if (response.ok) {
+          lastRefreshAt = Date.now();
+          return "ok";
+        }
+        // 401/403: the refresh token itself is gone, expired, or revoked — the session is over.
+        // Anything else (5xx, 429) is transient and must not log anyone out mid-exam.
+        return response.status === 401 || response.status === 403 ? "rejected" : "unavailable";
+      } catch {
+        return "unavailable"; // offline / network error
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+function redirectToLogin() {
+  if (typeof window === "undefined" || window.location.pathname === "/login") return;
+  // A hard navigation on purpose: this runs outside React (no router here), and a full reload is
+  // what drops the ended session's cached queries and in-memory state.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login");
+}
+
+// Builds headers per attempt, so a retry picks up the csrf_token cookie the refresh just rotated.
+function send(path: string, options: RequestInit, method: string): Promise<Response> {
   const headers = new Headers(options.headers);
   // FormData sets its own multipart boundary — never override it with application/json.
   if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
   withCsrf(method, headers);
+  return fetch(`${API_URL}${path}`, { ...options, method, headers });
+}
 
-  const response = await fetch(`${API_URL}${path}`, { ...options, method, headers });
+async function fetchWithRefresh(path: string, options: RequestInit): Promise<Response> {
+  const method = (options.method || "GET").toUpperCase();
+  const sentAt = Date.now();
+  const response = await send(path, options, method);
+  if (response.status !== 401 || NO_REFRESH_PATHS.has(path)) return response;
+
+  // Sent with the old cookie before a refresh that has since completed → just retry, don't
+  // rotate again.
+  const outcome = sentAt < lastRefreshAt ? "ok" : await refreshSession();
+  if (outcome === "ok") return send(path, options, method);
+  if (outcome === "rejected") redirectToLogin();
+  return response;
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetchWithRefresh(path, options);
   if (response.status === 204) return undefined as T;
   if (!response.ok) throw await toApiError(response);
 
@@ -63,14 +124,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 async function requestBlob(path: string, options: RequestInit = {}): Promise<{ blob: Blob; filename: string | null }> {
-  const method = (options.method || "GET").toUpperCase();
-  const headers = new Headers(options.headers);
-  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  withCsrf(method, headers);
-
-  const response = await fetch(`${API_URL}${path}`, { ...options, method, headers });
+  const response = await fetchWithRefresh(path, options);
   if (!response.ok) throw await toApiError(response);
   const disposition = response.headers.get("content-disposition");
   const match = disposition?.match(/filename="?([^"]+)"?/);

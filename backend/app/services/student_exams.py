@@ -50,7 +50,12 @@ from app.schemas.student_exams import (
 )
 
 VIOLATION_DEBOUNCE_SECONDS = 3
-QUESTION_IMAGE_SIGN_SECONDS = 900  # 15 minutes (spec §4.4)
+QUESTION_IMAGE_SIGN_SECONDS = 900  # floor: 15 minutes (spec §4.4)
+# Question/passage image URLs must outlive the attempt itself (expires_at + submit grace), plus
+# this margin, or images go blank partway through any exam longer than the floor above.
+QUESTION_IMAGE_SIGN_MARGIN = timedelta(minutes=5)
+# S3 SigV4 (and Cloudflare R2) presigned URLs can't be valid for more than 7 days.
+QUESTION_IMAGE_SIGN_MAX_SECONDS = 7 * 24 * 3600
 
 _TERMINAL_NON_SUPERSEDED = (AttemptStatus.submitted, AttemptStatus.expired)
 _OPEN_STATUSES = (AttemptStatus.granted, AttemptStatus.in_progress, AttemptStatus.locked)
@@ -165,15 +170,19 @@ def _attempt_payload(db: Session, attempt: ExamAttempt) -> AttemptPayload:
         .options(selectinload(Exam.questions).selectinload(ExamQuestion.choices), selectinload(Exam.passages))
     )
     questions = sorted(exam.questions, key=lambda q: q.position)
-    answers = {a.question_id: a.choice_id for a in db.scalars(select(ExamAnswer).where(ExamAnswer.attempt_id == attempt.id)).all()}
+    answer_rows = db.scalars(select(ExamAnswer).where(ExamAnswer.attempt_id == attempt.id)).all()
+    answers = {a.question_id: a.choice_id for a in answer_rows}
+    last_client_seq = max((a.client_seq for a in answer_rows), default=0)
     settings_row = db.get(AcademySettings, exam.academy_id)
     violation_limit = settings_row.violation_limit if settings_row else 2
+    grace_seconds = settings_row.exam_submit_grace_seconds if settings_row else 0
+    sign_seconds = _image_sign_seconds(attempt, grace_seconds)
 
     out_questions = []
     for q in questions:
         image_url = None
         if q.image_file_id:
-            signed = files_svc.signed_url(db, q.image_file_id, expires_in=QUESTION_IMAGE_SIGN_SECONDS)
+            signed = files_svc.signed_url(db, q.image_file_id, expires_in=sign_seconds)
             image_url = signed[0] if signed else None
         out_questions.append(AttemptQuestionOut(
             id=q.id, position=q.position, type=q.question_type.value, prompt_text=q.prompt_text or None, image_url=image_url,
@@ -190,15 +199,26 @@ def _attempt_payload(db: Session, attempt: ExamAttempt) -> AttemptPayload:
     for p in sorted(exam.passages, key=lambda p: p.position):
         image_url = None
         if p.image_file_id:
-            signed = files_svc.signed_url(db, p.image_file_id, expires_in=QUESTION_IMAGE_SIGN_SECONDS)
+            signed = files_svc.signed_url(db, p.image_file_id, expires_in=sign_seconds)
             image_url = signed[0] if signed else None
         out_passages.append(AttemptPassageOut(id=p.id, title=p.title, body_text=p.body_text, image_url=image_url, position=p.position))
 
     return AttemptPayload(
         attempt_id=attempt.id, status=attempt.status.value, expires_at=attempt.expires_at, server_now=utcnow(),
         violation_count=attempt.violation_count, violation_limit=violation_limit, questions=out_questions,
-        passages=out_passages, saved_answers=answers,
+        passages=out_passages, saved_answers=answers, last_client_seq=last_client_seq,
     )
+
+
+def _image_sign_seconds(attempt: ExamAttempt, grace_seconds: int) -> int:
+    """Seconds until expires_at + submit grace + margin: the last moment the attempt can still be
+    written to, plus headroom. Never below the old 15-minute floor (e.g. for an already-closed
+    attempt) and never above what a presigned URL allows."""
+    if attempt.expires_at is None:
+        return QUESTION_IMAGE_SIGN_SECONDS
+    deadline = attempt.expires_at + timedelta(seconds=grace_seconds) + QUESTION_IMAGE_SIGN_MARGIN
+    remaining = int((deadline - utcnow()).total_seconds())
+    return max(QUESTION_IMAGE_SIGN_SECONDS, min(remaining, QUESTION_IMAGE_SIGN_MAX_SECONDS))
 
 
 # ---------------------------------------------------------------------------- start / resume ----

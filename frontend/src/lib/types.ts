@@ -630,6 +630,8 @@ export interface AttemptPayload {
   questions: AttemptQuestionOut[];
   passages: AttemptPassageOut[];
   saved_answers: Record<number, number | null>;
+  /** Highest client_seq the server has stored; a resumed runner continues numbering above it. */
+  last_client_seq: number;
 }
 
 export interface AnswerIn {
