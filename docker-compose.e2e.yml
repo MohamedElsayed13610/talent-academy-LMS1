@@ -1,0 +1,71 @@
+# End-to-end test stack, layered on top of the dev stack:
+#
+#   docker compose -f docker-compose.dev.yml -f docker-compose.e2e.yml up -d --build backend-e2e frontend-e2e
+#   cd frontend && npm run test:e2e
+#
+# Same images, bind mounts and dev servers as `backend`/`frontend`, sharing the dev Postgres and
+# MinIO containers -- but with its own database (talent_e2e, created and seeded on startup) and
+# its own buckets, so an E2E run never reads or writes the dev database's tables or files.
+# Reset it with:  docker compose -f docker-compose.dev.yml exec postgres dropdb -U talent talent_e2e
+
+services:
+  backend-e2e:
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg://talent:talent@postgres:5432/talent_e2e
+      # The E2E suite signs an already-expired access token with this to exercise the refresh path.
+      SECRET_KEY: e2e-only-secret-key-never-used-anywhere-else-0123456789
+      FRONTEND_URL: http://localhost:3001
+      ENVIRONMENT: development
+      SEED_DEV_DATA: "true"
+      R2_ENDPOINT_URL: http://minio:9000
+      R2_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      R2_ACCESS_KEY_ID: talent-dev
+      R2_SECRET_ACCESS_KEY: talent-dev-secret
+      R2_REGION: us-east-1
+      R2_BUCKET_FILES: talent-e2e-files
+      R2_BUCKET_BACKUPS: talent-e2e-backups
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend:/app
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        export PGPASSWORD=talent
+        psql -h postgres -U talent -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'talent_e2e'" | grep -q 1 \
+          || psql -h postgres -U talent -d postgres -c "CREATE DATABASE talent_e2e"
+        python -c "
+        from app.core.config import settings
+        from app.services.storage_r2 import _client
+        client = _client()
+        existing = {b['Name'] for b in client.list_buckets()['Buckets']}
+        for bucket in (settings.r2_bucket_files, settings.r2_bucket_backups):
+            if bucket not in existing:
+                client.create_bucket(Bucket=bucket)
+        "
+        alembic upgrade head
+        python -m app.cli.seed_dev
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  frontend-e2e:
+    build: ./frontend
+    depends_on:
+      - backend-e2e
+    environment:
+      NEXT_PUBLIC_API_URL: /api/v1
+      BACKEND_INTERNAL_URL: http://backend-e2e:8000
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    command: sh -c "npm ci && npm run dev"

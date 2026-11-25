@@ -372,7 +372,10 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   return (
     <div className="mx-auto max-w-5xl pb-24">
-      <div className="sticky top-0 z-10 -mx-4 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur">
+      {/* top-16: stick *below* the student shell's own sticky h-16 top bar (z-30). At top-0 the two
+          stacked and the shell bar covered this one whenever the page scrolled, hiding the timer
+          and the saved / not-saved indicator. */}
+      <div className="sticky top-16 z-10 -mx-4 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-2 text-body-sm">
           <span>سؤال {currentIndex + 1} من {questions.length}</span>
           <span className="text-text-subtle">· تمت الإجابة على {answeredCount}</span>
@@ -511,7 +514,9 @@ function QuestionNavigator({ questions, answers, currentIndex, onSelect }: {
 function PassagePanel({ passage }: { passage: AttemptPassageOut }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="mb-4 rounded-lg border border-border bg-surface-2 lg:sticky lg:top-20 lg:mb-0 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+    // lg:top-36 = the shell bar (4rem) + the exam header stuck below it (~3.6rem) + a gap, so the
+    // passage sticks under both instead of sliding beneath them.
+    <div className="mb-4 rounded-lg border border-border bg-surface-2 lg:sticky lg:top-36 lg:mb-0 lg:max-h-[calc(100vh-10rem)] lg:overflow-y-auto">
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between p-4 text-start lg:pointer-events-none">
         <span className="flex items-center gap-2 text-body-sm font-medium"><BookOpen size={16} /> {passage.title || "مقطع القراءة"}</span>
         <span className="lg:hidden">{open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</span>
