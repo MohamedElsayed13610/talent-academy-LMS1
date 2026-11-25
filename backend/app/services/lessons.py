@@ -15,11 +15,12 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.errors import ForbiddenError, NotFoundError
 from app.core.time import utcnow
 from app.models.courses import Course, Lesson, LessonMaterial, LessonProgress, Section
+from app.models.files import File
 from app.models.identity import StudentProfile, User
 from app.models.points import PointSource
 from app.services import files as files_svc
 from app.services import points as points_svc
-from app.services.access import accessible_course_ids, has_course_access, subscription_allows_access
+from app.services.access import StudentAccess, accessible_course_ids, has_course_access, subscription_allows_access
 from app.services.audit import record_audit
 from app.schemas.courses import (
     CourseCard,
@@ -60,17 +61,27 @@ def _course_card(db: Session, user_id: int, course: Course, lesson_count: int, c
     )
 
 
-def list_course_cards(db: Session, user: User) -> list[CourseCard]:
-    profile = db.get(StudentProfile, user.id)
-    if not subscription_allows_access(user, profile):
-        return []
-    course_ids = accessible_course_ids(db, user.id)
+def list_course_cards(db: Session, user: User, access: StudentAccess | None = None) -> list[CourseCard]:
+    if access is None:
+        profile = db.get(StudentProfile, user.id)
+        if not subscription_allows_access(user, profile):
+            return []
+        course_ids = accessible_course_ids(db, user.id)
+    else:
+        if not access.subscription_ok:
+            return []
+        course_ids = access.course_ids
     if not course_ids:
         return []
     courses = db.scalars(select(Course).where(Course.id.in_(course_ids), Course.is_published.is_(True)).order_by(Course.id)).all()
     if not courses:
         return []
     visible_ids = [c.id for c in courses]
+    # Load every cover's File row in one query, so the per-card files_svc.signed_url() db.get()
+    # below is served from the session's identity map instead of one query per course.
+    cover_ids = [c.cover_file_id for c in courses if c.cover_file_id]
+    if cover_ids:
+        db.scalars(select(File).where(File.id.in_(cover_ids))).all()
 
     lesson_counts = dict(db.execute(
         select(Section.course_id, func.count(Lesson.id)).select_from(Section)

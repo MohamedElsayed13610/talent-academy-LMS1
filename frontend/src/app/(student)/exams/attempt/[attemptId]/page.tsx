@@ -220,37 +220,69 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   // ------------------------------------------------------------------------------------ autosave ----
 
+  // Answers changed since the server last acknowledged them (question id -> latest choice). Each
+  // autosave sends only these, not the whole sheet. An entry is dropped only once a save carrying
+  // that exact value succeeds, so a failed save is simply folded into the next one, and every
+  // newer save is a superset of any older one still in flight.
+  const pendingRef = useRef(new Map<number, number | null>());
+  const flushRef = useRef<() => void>(() => {});
+
   const flushAutosave = useCallback(async () => {
+    const pending = pendingRef.current;
+    if (pending.size === 0) return; // nothing changed since the last acknowledged save
+    const batch = new Map(pending);
+    // A fresh seq per request (not per click): a retry of an unacknowledged batch must never look
+    // to the server like a stale duplicate of itself.
+    clientSeqRef.current += 1;
     const seq = clientSeqRef.current;
     markSaving();
     try {
-      const res = await autosave.mutateAsync({ clientSeq: seq, answers: toAnswerList(answersRef.current) });
+      const res = await autosave.mutateAsync({ clientSeq: seq, answers: [...batch].map(([question_id, choice_id]) => ({ question_id, choice_id })) });
       expiresAtMsRef.current = new Date(res.expires_at).getTime();
-      if (res.saved) lastSavedSeqRef.current = Math.max(lastSavedSeqRef.current, seq);
-      // saved=false for a seq already stored is just the 20s safety-net re-sending the same batch.
-      // saved=false for a *newer* seq means the server kept someone else's answers, not ours.
-      if (lastSavedSeqRef.current >= clientSeqRef.current) setSaveStatus("saved");
-      else if (!res.saved && seq > lastSavedSeqRef.current) setSaveStatus("error");
-      // otherwise newer changes are already queued, and their own flush reports the outcome
+      // A newer save already succeeded and carried everything this one did -- nothing to update.
+      if (seq < lastSavedSeqRef.current) return;
+      if (!res.saved) {
+        // Even a fresh seq wasn't newer than the server's: another tab/device has saved past us.
+        setSaveStatus("error");
+        return;
+      }
+      lastSavedSeqRef.current = seq;
+      for (const [questionId, choiceId] of batch) {
+        if (pending.get(questionId) === choiceId) pending.delete(questionId);
+      }
+      if (pending.size === 0) setSaveStatus("saved");
+      // otherwise newer changes are queued behind this save, and their own flush reports the outcome
     } catch (err) {
       if (err instanceof ApiError && err.status === 423) setLocked(true);
       else if (err instanceof ApiError && err.code === "ATTEMPT_EXPIRED") setClosedStatus("expired");
       else if (err instanceof ApiError && err.code === "ATTEMPT_NOT_ACTIVE") setClosedStatus("submitted");
-      // A late failure for a batch that a newer save already superseded doesn't matter.
-      else if (seq > lastSavedSeqRef.current) setSaveStatus("error");
+      else if (seq < lastSavedSeqRef.current) return; // superseded by a newer successful save
+      else if (err instanceof ApiError && err.status === 429) {
+        // Over the server's per-attempt autosave rate: not a failure -- the answers are still
+        // pending, so just try again shortly.
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => flushRef.current(), 1200);
+      } else setSaveStatus("error");
     }
   }, [autosave, markSaving]);
 
+  useEffect(() => {
+    flushRef.current = flushAutosave;
+  }, [flushAutosave]);
+
   function setAnswer(questionId: number, choiceId: number) {
     if (!active) return;
-    setAnswers((prev) => ({ ...prev, [questionId]: prev[questionId] === choiceId ? null : choiceId }));
+    const next = answersRef.current[questionId] === choiceId ? null : choiceId;
+    answersRef.current = { ...answersRef.current, [questionId]: next };
+    setAnswers(answersRef.current);
+    pendingRef.current.set(questionId, next);
     markSaving();
-    clientSeqRef.current += 1;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(flushAutosave, 900);
   }
 
-  // Safety-net autosave every 20s in case the debounced save above never fired.
+  // Safety-net autosave every 20s in case the debounced save above never fired or failed. It's a
+  // no-op (no request at all) while nothing is pending.
   useEffect(() => {
     if (!active) return;
     const interval = setInterval(flushAutosave, 20_000);
@@ -340,7 +372,10 @@ function ActiveRunner({ attemptId, initial }: { attemptId: number; initial: Atte
 
   return (
     <div className="mx-auto max-w-5xl pb-24">
-      <div className="sticky top-0 z-10 -mx-4 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur">
+      {/* top-16: stick *below* the student shell's own sticky h-16 top bar (z-30). At top-0 the two
+          stacked and the shell bar covered this one whenever the page scrolled, hiding the timer
+          and the saved / not-saved indicator. */}
+      <div className="sticky top-16 z-10 -mx-4 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-2 text-body-sm">
           <span>سؤال {currentIndex + 1} من {questions.length}</span>
           <span className="text-text-subtle">· تمت الإجابة على {answeredCount}</span>
@@ -479,7 +514,9 @@ function QuestionNavigator({ questions, answers, currentIndex, onSelect }: {
 function PassagePanel({ passage }: { passage: AttemptPassageOut }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="mb-4 rounded-lg border border-border bg-surface-2 lg:sticky lg:top-20 lg:mb-0 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+    // lg:top-36 = the shell bar (4rem) + the exam header stuck below it (~3.6rem) + a gap, so the
+    // passage sticks under both instead of sliding beneath them.
+    <div className="mb-4 rounded-lg border border-border bg-surface-2 lg:sticky lg:top-36 lg:mb-0 lg:max-h-[calc(100vh-10rem)] lg:overflow-y-auto">
       <button type="button" onClick={() => setOpen((o) => !o)} className="flex w-full items-center justify-between p-4 text-start lg:pointer-events-none">
         <span className="flex items-center gap-2 text-body-sm font-medium"><BookOpen size={16} /> {passage.title || "مقطع القراءة"}</span>
         <span className="lg:hidden">{open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</span>

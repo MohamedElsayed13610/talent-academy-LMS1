@@ -25,7 +25,7 @@ import app.models  # noqa: E402, F401
 from app.core.config import settings  # noqa: E402
 from app.core.rate_limit import rate_limiter  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
-from app.db.session import get_db  # noqa: E402
+from app.db.session import get_db, pin_utc  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.identity import AdminProfile, User, UserRole  # noqa: E402
 
@@ -41,7 +41,9 @@ def _alembic_config() -> AlembicConfig:
 
 @pytest.fixture(scope="session")
 def engine():
-    eng = create_engine(settings.database_url)
+    # Same UTC pin as the app's own engine (app/db/session.py) -- the tests' sessions run on this
+    # engine, not that one, so without it they'd inherit whatever time zone the local Postgres has.
+    eng = pin_utc(create_engine(settings.database_url))
     yield eng
     eng.dispose()
 
@@ -54,6 +56,15 @@ def _reset_rate_limiter():
     rate_limiter._buckets.clear()
     yield
     rate_limiter._buckets.clear()
+
+
+@pytest.fixture()
+def unthrottled_autosave(monkeypatch):
+    """For tests about autosave *ordering* that deliberately send several saves within one second.
+    The AUTOSAVE_PER_ATTEMPT throttle itself is covered by test_autosave_is_rate_limited_per_attempt."""
+    from app.api.v1 import me_exams
+
+    monkeypatch.setattr(me_exams, "AUTOSAVE_PER_ATTEMPT", (1000, 1.0))
 
 
 @pytest.fixture()

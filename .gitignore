@@ -22,6 +22,9 @@ frontend/build/
 frontend/next-env.d.ts
 frontend/*.tsbuildinfo
 frontend/.turbo/
+frontend/e2e/.artifacts/
+frontend/test-results/
+frontend/playwright-report/
 
 # Env files
 .env

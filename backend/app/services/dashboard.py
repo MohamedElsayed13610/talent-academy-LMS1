@@ -16,7 +16,7 @@ from app.services import lessons as lessons_svc
 from app.services import live_sessions as live_svc
 from app.services import points as points_svc
 from app.services import student_exams as exams_svc
-from app.services.access import effective_subscription_status, subscription_allows_access
+from app.services.access import effective_subscription_status, load_student_access, subscription_allows_access
 from app.schemas.dashboard import AccessBlockedOut, AttendanceSummaryOut, DashboardOut, DashboardPointsOut, DashboardStudentOut
 from app.schemas.student_exams import Result, StudentExamCard
 
@@ -64,21 +64,24 @@ def _recent_results(db: Session, user_id: int) -> list[Result]:
 
 
 def get_dashboard(db: Session, academy_id: int, user: User) -> DashboardOut:
-    profile = db.get(StudentProfile, user.id)
+    # Profile, course grants and group memberships are loaded once here and shared by every
+    # section below, instead of each section (and each exam inside one) re-querying them.
+    access = load_student_access(db, user)
+    profile = access.profile
     blocked = _access_blocked(user, profile)
 
-    courses = [] if blocked else lessons_svc.list_course_cards(db, user)
-    sessions = [] if blocked else live_svc.list_my_sessions(db, academy_id, user, None)
+    courses = [] if blocked else lessons_svc.list_course_cards(db, user, access)
+    sessions = [] if blocked else live_svc.list_my_sessions(db, academy_id, user, None, access)
     now = utcnow()
     next_session = next((s for s in sessions if s.ends_at >= now), None)
 
-    exam_cards = [] if blocked else exams_svc.list_my_exams(db, academy_id, user)
+    exam_cards = [] if blocked else exams_svc.list_my_exams(db, academy_id, user, access)
     next_exam = _next_exam(exam_cards)
 
     unread = 0
     from app.services.announcements import visible_announcement_ids  # local import avoids a cycle at module load time
 
-    visible_ids = set() if blocked else visible_announcement_ids(db, academy_id, user)
+    visible_ids = set() if blocked else visible_announcement_ids(db, academy_id, user, access)
     if visible_ids:
         read_ids = set(db.scalars(select(AnnouncementRead.announcement_id).where(AnnouncementRead.user_id == user.id, AnnouncementRead.announcement_id.in_(visible_ids))).all())
         unread = len(visible_ids - read_ids)
@@ -91,7 +94,7 @@ def get_dashboard(db: Session, academy_id: int, user: User) -> DashboardOut:
         next_exam=next_exam,
         attendance=_attendance_summary(db, user.id),
         points=DashboardPointsOut(total=profile.total_points if profile else 0, monthly=points_svc.monthly_points(db, user.id)),
-        course_ranks=[] if blocked else points_svc.course_ranks_for_student(db, user),
+        course_ranks=[] if blocked else points_svc.course_ranks_for_student(db, user, access),
         unread_notifications=unread,
         recent_results=_recent_results(db, user.id),
     )

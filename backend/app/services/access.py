@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -60,6 +62,29 @@ def accessible_course_ids(db: Session, user_id: int) -> set[int]:
         )
     ).all()
     return set(direct) | set(grouped)
+
+
+@dataclass(frozen=True)
+class StudentAccess:
+    """One student's access facts, loaded once per request and handed to every per-student listing
+    (courses, sessions, exams, announcements, ranks) instead of each of them -- or each *item* in
+    them -- re-querying the same profile, course grants and group memberships."""
+
+    profile: StudentProfile | None
+    subscription_ok: bool
+    course_ids: frozenset[int]
+    group_ids: frozenset[int]
+
+
+def load_student_access(db: Session, user: User) -> StudentAccess:
+    profile = db.get(StudentProfile, user.id)
+    group_ids = db.scalars(select(GroupMembership.group_id).where(GroupMembership.user_id == user.id)).all()
+    return StudentAccess(
+        profile=profile,
+        subscription_ok=subscription_allows_access(user, profile),
+        course_ids=frozenset(accessible_course_ids(db, user.id)),
+        group_ids=frozenset(group_ids),
+    )
 
 
 def has_course_access(db: Session, user: User, profile: StudentProfile | None, course_id: int) -> bool:
