@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -52,24 +53,32 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
     if not user:
         raise UnauthorizedError(code="INVALID_CREDENTIALS", message="بيانات الدخول غير صحيحة")
 
-    access, refresh, csrf = issue_session(db, user, request, payload.remember)
-    set_auth_cookies(response, access, refresh, csrf, payload.remember)
+    tokens = issue_session(db, user, request, payload.remember)
+    set_auth_cookies(response, tokens)
     return LoginResponse(user=_me_out(user), must_change_password=user.must_change_password)
 
 
+def _session_ended(code: str, message: str) -> JSONResponse:
+    """A 401 that also clears every auth cookie. Built by hand rather than raised: cookies set on the
+    injected Response are discarded when an exception is raised, so a raised 401 would leave the
+    long-lived access cookie behind and the route guard would keep treating the user as signed in."""
+    response = JSONResponse(status_code=401, content={"error": {"code": code, "message": message, "details": {}}})
+    clear_auth_cookies(response)
+    return response
+
+
 @router.post("/refresh", response_model=LoginResponse)
-def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
+def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> LoginResponse | JSONResponse:
     verify_csrf(request)
     raw_refresh = request.cookies.get(REFRESH_COOKIE)
     if not raw_refresh:
-        raise UnauthorizedError(code="NO_SESSION", message="يجب تسجيل الدخول")
+        return _session_ended("NO_SESSION", "يجب تسجيل الدخول")
     result = rotate_session(db, raw_refresh, request)
     if not result:
-        clear_auth_cookies(response)
-        raise UnauthorizedError(code="SESSION_EXPIRED", message="انتهت الجلسة، سجل الدخول من جديد")
+        return _session_ended("SESSION_EXPIRED", "انتهت الجلسة، سجل الدخول من جديد")
     # The session row's own `remember` flag (copied forward on every rotation from the original
     # login) decides whether the refresh cookie stays a browser-session cookie.
-    set_auth_cookies(response, result.access_token, result.refresh_token, result.csrf_token, result.remember)
+    set_auth_cookies(response, result)
     return LoginResponse(user=_me_out(result.user), must_change_password=result.user.must_change_password)
 
 
@@ -109,6 +118,5 @@ def change_password(
     revoke_all_sessions(db, user.id)
     raw_refresh = request.cookies.get(REFRESH_COOKIE)
     remember = bool(raw_refresh)
-    access, refresh_token, csrf = issue_session(db, user, request, remember)
-    set_auth_cookies(response, access, refresh_token, csrf, remember)
+    set_auth_cookies(response, issue_session(db, user, request, remember))
     return LoginResponse(user=_me_out(user), must_change_password=False)

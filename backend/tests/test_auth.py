@@ -1,9 +1,12 @@
+import re
 from datetime import timedelta
 
+import jwt
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.core.security import hash_password, hash_refresh_token, verify_password
+from app.core.config import settings
+from app.core.security import create_access_token, hash_password, hash_refresh_token, verify_password
 from app.core.time import utcnow
 from app.db.scope import get_default_academy_id
 from app.main import app
@@ -174,3 +177,82 @@ def test_refresh_token_reuse_after_grace_window_revokes_family(client, db_sessio
     assert replay.json()["error"]["code"] == "SESSION_EXPIRED"
     # Outside the window, reuse is still treated as theft: the whole family is revoked.
     assert _refresh_with(r2, csrf).status_code == 401
+
+
+# ------------------------------------------------ access cookie lifetime vs JWT lifetime (route guard) ----
+
+def _set_cookie(response, name):
+    return next((h for h in response.headers.get_list("set-cookie") if h.startswith(f"{name}=")), None)
+
+
+def _max_age(set_cookie_header):
+    match = re.search(r"max-age=(-?\d+)", set_cookie_header, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _jwt_seconds_left(token):
+    return jwt.decode(token, options={"verify_signature": False})["exp"] - utcnow().timestamp()
+
+
+def test_access_cookie_lives_as_long_as_the_session_but_jwt_still_expires_quickly(client, db_session, admin_user, monkeypatch):
+    _make_student(db_session)
+    student_session_seconds = settings.student_refresh_token_days * 24 * 3600
+    jwt_seconds = settings.access_token_expire_minutes * 60
+
+    remembered = client.post("/api/v1/auth/login", json={"identifier": "TA-000001", "password": "Student123!", "remember": True})
+    access_cookie = _set_cookie(remembered, "access_token")
+    # The cookie outlives the JWT by far, so proxy.ts keeps seeing the role after the JWT expires...
+    assert student_session_seconds - 10 <= _max_age(access_cookie) <= student_session_seconds
+    # ...while the JWT inside still expires after ACCESS_TOKEN_EXPIRE_MINUTES.
+    assert jwt_seconds - 10 <= _jwt_seconds_left(remembered.cookies["access_token"]) <= jwt_seconds
+
+    # After a refresh the cookie tracks the *remaining* session (rotation keeps expires_at).
+    refreshed = _refresh_with(remembered.cookies["refresh_token"], remembered.cookies["csrf_token"])
+    assert refreshed.status_code == 200
+    assert student_session_seconds - 10 <= _max_age(_set_cookie(refreshed, "access_token")) <= _max_age(access_cookie)
+    assert _jwt_seconds_left(refreshed.cookies["access_token"]) <= jwt_seconds
+
+    # remember=False stays a browser-session cookie, before and after a refresh.
+    session_only = client.post("/api/v1/auth/login", json={"identifier": "TA-000001", "password": "Student123!", "remember": False})
+    assert _max_age(_set_cookie(session_only, "access_token")) is None
+    refreshed = _refresh_with(session_only.cookies["refresh_token"], session_only.cookies["csrf_token"])
+    assert _max_age(_set_cookie(refreshed, "access_token")) is None
+
+    # Admin sessions are shorter (12h), and the cookie follows the session, not the student default.
+    admin = client.post("/api/v1/auth/login", json={"identifier": "admin@talent.dev", "password": "Admin123!Dev", "remember": True})
+    admin_seconds = settings.admin_refresh_token_hours * 3600
+    assert admin_seconds - 10 <= _max_age(_set_cookie(admin, "access_token")) <= admin_seconds
+
+    # A still-present cookie holding an expired JWT is rejected by the backend (api.ts then refreshes).
+    monkeypatch.setattr(settings, "access_token_expire_minutes", -1)
+    expired = create_access_token(str(admin_user.id), "admin", "sid")
+    me = TestClient(app).get("/api/v1/auth/me", headers={"cookie": f"access_token={expired}"})
+    assert me.status_code == 401
+    assert me.json()["error"]["code"] == "INVALID_TOKEN"
+
+
+def test_failed_refresh_and_logout_clear_every_auth_cookie(client, db_session):
+    _make_student(db_session)
+
+    def assert_cleared(response):
+        for name in ("access_token", "refresh_token", "csrf_token"):
+            header = _set_cookie(response, name)
+            assert header is not None, f"{name} not cleared: {response.headers.get_list('set-cookie')}"
+            assert _max_age(header) == 0, header
+
+    unknown = _refresh_with("not-a-real-refresh-token", "csrf")
+    assert unknown.status_code == 401
+    assert unknown.json()["error"]["code"] == "SESSION_EXPIRED"
+    assert_cleared(unknown)
+
+    no_refresh_cookie = TestClient(app).post(
+        "/api/v1/auth/refresh", headers={"cookie": "csrf_token=csrf", "x-csrf-token": "csrf"},
+    )
+    assert no_refresh_cookie.status_code == 401
+    assert no_refresh_cookie.json()["error"]["code"] == "NO_SESSION"
+    assert_cleared(no_refresh_cookie)
+
+    login = client.post("/api/v1/auth/login", json={"identifier": "TA-000001", "password": "Student123!", "remember": True})
+    logout = client.post("/api/v1/auth/logout", headers={"x-csrf-token": login.cookies["csrf_token"]})
+    assert logout.status_code == 204
+    assert_cleared(logout)
